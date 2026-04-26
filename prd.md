@@ -569,7 +569,6 @@ aiwiki map --write
 ```bash
 aiwiki brief "给团队邀请功能增加 resend invite"
 aiwiki brief "重构支付模块" --output .aiwiki/context-packs/payment-refactor.md
-aiwiki brief "增加修改邮箱功能" --interactive
 ```
 
 行为：
@@ -689,17 +688,17 @@ MVP 搜索策略：
 aiwiki reflect
 aiwiki reflect --from-git-diff
 aiwiki reflect --notes ./notes/today.md
-aiwiki reflect --interactive
 ```
 
 行为：
 
 1. 收集输入：git diff、用户 notes、最近 session log、已有相关 wiki 页面。
 2. 生成复盘建议。
-3. 生成将要写入的文件变更 preview。
-4. 默认不写入，除非用户确认或传入 `--yes`。
-5. 写入后更新 index、log、graph。
-6. 记录 eval case。
+3. 生成结构化复盘建议和可转成 `WikiUpdatePlan` 的候选内容。
+4. 默认不写入长期 wiki。
+5. 用户审核后，将接受的内容保存为 update plan，并通过 `aiwiki apply <plan.json> --confirm` 写入。
+6. confirmed apply 写入后更新 index、log、graph。
+7. 记录 eval case。
 
 输出包括：
 
@@ -730,7 +729,6 @@ aiwiki reflect --interactive
 
 ```bash
 aiwiki ingest ./old-notes/stripe-webhook.md
-aiwiki ingest ./old-notes --batch
 ```
 
 行为：
@@ -738,12 +736,56 @@ aiwiki ingest ./old-notes --batch
 1. 将原始文件复制到 `.aiwiki/sources/raw-notes/`。
 2. 分析内容。
 3. 生成 pitfall / module / pattern / decision 更新建议。
-4. 用户确认后写入。
-5. 更新 index、log、graph。
+4. 输出可转成 `WikiUpdatePlan` 的候选内容。
+5. 用户审核后，通过 `aiwiki apply <plan.json> --confirm` 写入。
+6. confirmed apply 写入后更新 index、log、graph。
 
 ---
 
-### 12.8 `aiwiki lint`
+### 12.8 `aiwiki apply <plan.json>`
+
+确认式写入结构化 wiki 更新。
+
+用法：
+
+```bash
+aiwiki apply ./wiki-update.json
+aiwiki apply ./wiki-update.json --confirm
+aiwiki apply ./wiki-update.json --confirm --no-graph
+aiwiki apply ./wiki-update.json --format json
+```
+
+行为：
+
+1. 读取 project-local JSON update plan。
+2. 使用 Zod 校验 `WikiUpdatePlan`、entry、frontmatter 和 slug。
+3. 根据 `type + slug` 推导目标路径，不接受任意输出路径。
+4. 默认 dry-run，只展示 create / append / skip 操作。
+5. 只有传入 `--confirm` 才写入。
+6. 新页面仅写入 `.aiwiki/wiki/modules`、`.aiwiki/wiki/pitfalls`、`.aiwiki/wiki/decisions`、`.aiwiki/wiki/patterns`、`.aiwiki/wiki/rules`。
+7. 已存在页面默认 skip，不覆盖用户内容。
+8. 已存在页面只有提供显式 `append` sections 时才追加。
+9. confirmed apply 后重建 `index.md`、追加 `log.md`，默认重建 graph。
+10. `--no-graph` 可跳过 graph 重建。
+
+支持的 entry 类型：
+
+* `module`
+* `pitfall`
+* `decision`
+* `pattern`
+* `rule`
+
+重要约束：
+
+* `aiwiki apply` 不删除文件。
+* `aiwiki apply` 不覆盖已有 wiki 页面。
+* `aiwiki apply` 不修改项目根 `AGENTS.md`、`CLAUDE.md` 或 `.cursor/rules`。
+* 规则升级第一步只写 `.aiwiki/wiki/rules/`，后续同步 agent 规则文件必须另走显式确认流程。
+
+---
+
+### 12.9 `aiwiki lint`
 
 知识库健康检查。
 
@@ -769,7 +811,7 @@ aiwiki lint --fix
 
 ---
 
-### 12.9 `aiwiki promote-rules`
+### 12.10 `aiwiki promote-rules`
 
 发现并升级规则。
 
@@ -777,7 +819,7 @@ aiwiki lint --fix
 
 ```bash
 aiwiki promote-rules
-aiwiki promote-rules --target agents
+aiwiki promote-rules --min-count 3
 ```
 
 行为：
@@ -785,12 +827,13 @@ aiwiki promote-rules --target agents
 1. 扫描高频 pitfall。
 2. 找出重复出现、严重程度高、适合长期约束 AI 的经验。
 3. 生成规则候选。
-4. 用户确认后写入 `wiki/rules/`。
-5. 可选同步到 `AGENTS.md`、`CLAUDE.md`、`.cursor/rules/`。
+4. 输出 rule update-plan 草案。
+5. 用户审核后，通过 `aiwiki apply <plan.json> --confirm` 写入 `wiki/rules/`。
+6. 不自动同步到 `AGENTS.md`、`CLAUDE.md`、`.cursor/rules/`。
 
 ---
 
-### 12.10 `aiwiki graph build`
+### 12.11 `aiwiki graph build`
 
 构建轻量图谱。
 
@@ -798,8 +841,6 @@ aiwiki promote-rules --target agents
 
 ```bash
 aiwiki graph build
-aiwiki graph related payment
-aiwiki graph hotspots
 ```
 
 MVP `graph build` 行为：
@@ -861,8 +902,9 @@ MVP 可以先支持手动记录。后续通过 hooks 或 MCP 自动记录。
 5. Codex 用自己的 plan mode 生成 implementation plan
 6. Codex 修改代码并运行测试
 7. aiwiki reflect 分析 git diff 和开发记录
-8. 用户确认新经验和规则升级
-9. AIWiki 更新 wiki、index、log、graph
+8. 用户把确认的新经验整理为 `WikiUpdatePlan`
+9. aiwiki apply preview 展示将写入的 wiki 变更
+10. aiwiki apply --confirm 更新 wiki、index、log、graph
 ```
 
 ### 13.2 高风险文件流程
@@ -872,17 +914,18 @@ MVP 可以先支持手动记录。后续通过 hooks 或 MCP 自动记录。
 2. 调用 aiwiki guard <file>
 3. 读取历史坑和规则
 4. Codex 生成更谨慎的实现计划
-5. 开发后 reflect 更新相关页面
+5. 开发后 reflect 生成复盘建议
+6. 用户确认后通过 aiwiki apply 写入相关页面
 ```
 
 ### 13.3 旧文档导入流程
 
 ```text
 1. 用户把历史踩坑 md 放到 old-notes/
-2. aiwiki ingest old-notes --batch
+2. aiwiki ingest old-notes/stripe-webhook.md
 3. 工具生成结构化更新建议
-4. 用户确认
-5. 写入 wiki 并维护 index / graph
+4. 用户确认后整理为 `WikiUpdatePlan`
+5. aiwiki apply --confirm 写入 wiki 并维护 index / graph
 ```
 
 ---
@@ -1419,19 +1462,28 @@ JSON 模式用于未来 MCP / 插件集成。
 ### 28.4 Reflect
 
 * `aiwiki reflect --from-git-diff` 能读取 git diff。
-* 能生成待写入 preview。
-* 用户确认后能写入 pitfall / module / log / index。
+* 能生成复盘建议和 confirmed apply workflow 提示。
+* 默认不写入长期 wiki 页面。
 
 ### 28.5 Ingest
 
 * `aiwiki ingest <file>` 能导入旧 Markdown。
 * 能生成结构化 pitfall 建议。
+* 默认只保存 raw note 和输出建议，不直接写结构化 wiki 页面。
 
-### 28.6 Lint
+### 28.6 Apply
+
+* `aiwiki apply <plan.json>` 默认 dry-run，不写任何文件。
+* `aiwiki apply <plan.json> --confirm` 能写入 module / pitfall / decision / pattern / rule 页面。
+* confirmed apply 后能更新 `index.md`、追加 `log.md`、重建 graph。
+* 已存在页面默认不覆盖，只有显式 append sections 时追加。
+* malformed JSON、非法 frontmatter、非法 slug、未知 page type 都会失败。
+
+### 28.7 Lint
 
 * `aiwiki lint` 能检查 index 缺失、frontmatter 问题、孤立页面。
 
-### 28.7 Graph
+### 28.8 Graph
 
 * `aiwiki graph build` 能生成 `graph.json` 和 `backlinks.json`。
 
@@ -1474,7 +1526,7 @@ JSON 模式用于未来 MCP / 插件集成。
 * git diff 读取
 * reflect 生成更新建议
 * ingest 旧文档
-* 用户确认写入
+* 用户确认写入通过后续 `aiwiki apply` 完成
 
 ### Milestone 6：Lint 与 Graph
 
@@ -1488,18 +1540,26 @@ JSON 模式用于未来 MCP / 插件集成。
 * rule proposal
 * AGENTS.md 更新 preview
 
+### Milestone 10：确认式 Wiki 写入
+
+* `WikiUpdatePlan` schema
+* `aiwiki apply` dry-run preview
+* `aiwiki apply --confirm` 安全写入
+* index / log / graph 维护
+* reflect / ingest / promote-rules 对接 apply workflow
+
 ---
 
-## 29.1 当前实现状态（2026-04-25）
+## 29.1 当前实现状态（2026-04-26）
 
 本节用于新 Codex / Claude Code / Cursor 会话接力开发时快速理解当前仓库状态，避免重复从零实现。
 
 ### 已完成
 
-当前仓库已经完成 AIWiki 的 M1 + M2 + M3 基础架构与搜索 / Brief 实现：
+当前仓库已经完成 AIWiki 的 M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9 + M10 基础架构、搜索 / Brief、Guard / Map、Reflect / Ingest preview、Lint / Graph、规则升级 preview、任务连续性 MVP、decision/blocker 记录与确认式 Wiki 写入工作流实现：
 
 * Node.js + npm + TypeScript ESM 项目骨架。
-* CLI 框架，已实现 `aiwiki init`、`aiwiki search`、`aiwiki brief`。
+* CLI 框架，已实现 `aiwiki init`、`aiwiki search`、`aiwiki brief`、`aiwiki guard`、`aiwiki map`、`aiwiki reflect`、`aiwiki ingest`、`aiwiki apply`、`aiwiki lint`、`aiwiki graph build`、`aiwiki promote-rules`、`aiwiki task start/list/status/close`、`aiwiki checkpoint`、`aiwiki resume`、`aiwiki decision`、`aiwiki blocker`。
 * 支持：
 
 ```bash
@@ -1511,6 +1571,42 @@ aiwiki search "<query>" --type pitfall --limit 5 --format json
 aiwiki brief "<task>"
 aiwiki brief "<task>" --output .aiwiki/context-packs/current.md
 aiwiki brief "<task>" --format json
+aiwiki guard <file>
+aiwiki guard <file> --limit 5 --format json
+aiwiki map
+aiwiki map --format json
+aiwiki map --write
+aiwiki map --write --force
+aiwiki reflect
+aiwiki reflect --notes notes/today.md
+aiwiki reflect --from-git-diff
+aiwiki reflect --format json
+aiwiki ingest <file>
+aiwiki ingest <file> --force
+aiwiki ingest <file> --format json
+aiwiki apply <plan.json>
+aiwiki apply <plan.json> --confirm
+aiwiki apply <plan.json> --confirm --no-graph
+aiwiki apply <plan.json> --format json
+aiwiki lint
+aiwiki lint --format json
+aiwiki graph build
+aiwiki graph build --format json
+aiwiki promote-rules
+aiwiki promote-rules --min-count 3
+aiwiki promote-rules --format json
+aiwiki task start "实现团队邀请 resend invite"
+aiwiki task start "根据 PRD 开发 AIWiki MVP" --id aiwiki-mvp --prd prd.md
+aiwiki task list
+aiwiki task status
+aiwiki checkpoint --message "完成 init 命令" --status done
+aiwiki checkpoint --from-git-diff
+aiwiki resume
+aiwiki task close --status done
+aiwiki decision "MVP 使用 TypeScript + commander，不做 Web UI"
+aiwiki decision "resend invite 时刷新 token，并让旧 token 失效" --module team
+aiwiki blocker "reflect 写入是否默认需要用户确认？"
+aiwiki blocker "LLM provider 是否第一版支持 Anthropic？" --severity high
 ```
 
 * npm scripts：
@@ -1530,6 +1626,17 @@ npm run dev -- <args>
 * wiki page frontmatter Zod 校验。
 * 按 `type`、`module`、`file` 过滤 wiki pages。
 * `index.md` 初始化骨架。
+* `aiwiki apply` 确认式 Wiki 写入工作流：
+  * 读取 project-local JSON update plan。
+  * 使用 Zod 校验 `WikiUpdatePlan`、entry、frontmatter 和 slug。
+  * 仅支持 `module`、`pitfall`、`decision`、`pattern`、`rule` 五类长期 wiki 页面。
+  * 目标路径由 `type + slug` 推导，写入范围限制在 `.aiwiki/wiki/` 的对应目录内。
+  * 默认 dry-run，只输出 create / append / skip 操作，不写文件。
+  * `--confirm` 后才创建或追加页面。
+  * 新页面使用不覆盖写入，已存在页面默认 skip。
+  * 已存在页面只有提供显式 `append` sections 时才追加。
+  * confirmed apply 后重建 `.aiwiki/index.md`、追加 `.aiwiki/log.md`，默认重建 graph。
+  * `--no-graph` 可跳过 graph 重建。
 * `log.md` 初始化和 append 基础能力。
 * `aiwiki search` 本地 wiki 检索：
   * 扫描 `.aiwiki/wiki/**/*.md`。
@@ -1542,10 +1649,68 @@ npm run dev -- <args>
   * 明确提醒 Codex 自己制定 implementation plan，不把 brief 当具体代码编辑步骤。
   * 支持 `--output` 写入项目内文件，默认不覆盖，`--force` 才覆盖。
   * 成功生成后追加 `.aiwiki/log.md` 和 `.aiwiki/evals/brief-cases.jsonl`。
+* `aiwiki guard` no-LLM 文件护栏：
+  * 根据 frontmatter `files` 精确匹配相关 wiki pages。
+  * 使用文件路径关键词补充检索相关 module、pitfall、rule、decision、pattern。
+  * 输出 Related Modules、Critical Rules、Known Pitfalls、Required Checks、Related Decisions、Suggested Tests。
+  * high / critical 记忆优先展示，deprecated 页面降权。
+  * 未知文件输出稳定空结果，并建议可创建的 `wiki/files/<slug>.md` file note。
+* `aiwiki map` no-LLM Project Map：
+  * 扫描项目文件树，排除 `.aiwiki/`、`.git`、`node_modules`、构建产物、环境变量文件和 config ignore。
+  * 从 `package.json`、`tsconfig.json`、依赖和目录结构识别技术栈、重要目录和生成物候选。
+  * 汇总已有 module pages、rule pages、config `riskFiles`、config `highRiskModules` 和 wiki-derived high-risk files。
+  * 输出 Stack、Modules、Important Directories、High-Risk Files、Generated Files、Existing Rules、Missing Module Pages。
+  * `--write` 写入 `.aiwiki/wiki/project-map.md`，默认不覆盖，`--force` 才覆盖，并追加 `.aiwiki/log.md`。
+* `aiwiki reflect` no-LLM 复盘 preview：
+  * 可读取 project-local notes 文件。
+  * 可通过 `git diff -- .` 读取当前工作区 diff。
+  * 从 git diff 中提取 changed files。
+  * 使用 notes 和 changed files 检索相关 wiki pages。
+  * 输出 Task Summary、New Lessons、Pitfalls、Modules、Decisions、Patterns、Rules、Files Changed in `.aiwiki`。
+  * 默认不写结构化 wiki 页面。
+  * 输出 confirmed apply workflow 提示，引导用户把接受的建议转成 `WikiUpdatePlan` 后通过 `aiwiki apply --confirm` 写入。
+* `aiwiki ingest` no-LLM 旧笔记导入 preview：
+  * 读取 project-local Markdown note。
+  * 将原始笔记复制到 `.aiwiki/sources/raw-notes/`。
+  * 默认不覆盖已有 raw note，同名文件会生成递增文件名。
+  * `--force` 可覆盖 raw note copy。
+  * 根据 note 内容检索相关 wiki pages，并输出结构化建议。
+  * 不自动新增 pitfall、module、decision、pattern 或 rule 页面。
+  * 输出 confirmed apply workflow 提示，引导用户把接受的建议转成 `WikiUpdatePlan` 后通过 `aiwiki apply --confirm` 写入。
+* `aiwiki lint` 知识库健康检查：
+  * 容错扫描 `.aiwiki/wiki/**/*.md`。
+  * 报告 malformed frontmatter、index 缺失页面、断链、孤立页面、重复 pitfall、高风险模块缺少 module page。
+  * 默认只报告，不修改用户文件。
+  * 有 error 时 CLI 退出码为 1。
+* `aiwiki graph build` 轻量图谱构建：
+  * 从合法 wiki pages 生成 graph nodes / edges。
+  * 支持 page、file、module 节点。
+  * 支持 `relates_to`、`references_file`、`supersedes`、`conflicts_with`、`promoted_from` 等边。
+  * 解析 Markdown 双链和普通 `.md` 链接。
+  * 写入 `.aiwiki/graph/graph.json` 和 `.aiwiki/graph/backlinks.json`，并追加 `.aiwiki/log.md`。
+* `aiwiki promote-rules` 规则升级 preview：
+  * 扫描 `.aiwiki/wiki/**/*.md` 中的 pitfall pages。
+  * 默认选择 `severity: high | critical`、`encountered_count >= 2`、非 deprecated 的 pitfall。
+  * 支持 `--min-count <n>` 调整重复次数阈值。
+  * 输出 rule title、rule body、why、applies to、source pitfalls、suggested targets、requires confirmation。
+  * JSON preview 中包含 rule `updatePlan` 草案。
+  * 根据 config `rulesTargets` 建议 `wiki/rules`、`AGENTS.md`、`CLAUDE.md`、`.cursor/rules`。
+  * 只输出 preview 和 update-plan 草案，不自动创建 rule 页面，不修改 agent 规则文件。
+* 任务连续性与新会话接力 MVP：
+  * `aiwiki task start` 创建 `.aiwiki/tasks/<task-id>/`，初始化任务 Markdown、`metadata.json` 和 `checkpoints.jsonl`。
+  * `aiwiki task list` 列出任务并显示 active task。
+  * `aiwiki task status` 输出当前或指定任务状态。
+  * `aiwiki checkpoint` 追加 checkpoint，更新 `progress.md`、`changed-files.md`、`tests.md` 和 `resume.md`。
+  * `aiwiki checkpoint --from-git-diff` 记录当前 git diff changed files。
+  * `aiwiki resume` 生成给 Codex / Claude Code / Cursor 的接力简报。
+  * `aiwiki task close` 更新任务状态、清理 active task，并建议运行 `aiwiki reflect --from-git-diff`。
+  * `aiwiki decision` 记录当前任务中的用户决策，追加 `decisions.md` 和 `checkpoints.jsonl`，并刷新 `resume.md`。
+  * `aiwiki blocker` 记录当前任务中的阻塞问题或待确认问题，追加 `blockers.md` 和 `checkpoints.jsonl`，并刷新 `resume.md`。
+  * task 记录只表示当前任务状态，不污染长期 wiki 记忆。
 * 轻量 LLM Provider 接口已预留，但本阶段不调用远程模型。
 * 受控写入策略：默认不覆盖已有文件，`--force` 只刷新 AIWiki 管理的默认模板文件。
 * 根目录 `AGENTS.md`，用于约束本项目后续开发规范：可扩展、少硬编码、保护用户数据。
-* 测试覆盖 init、config、markdown、wiki-store、log、search、brief。
+* 测试覆盖 init、config、markdown、wiki-store、log、search、brief、guard、project-map、reflect、ingest、apply、lint、graph、promote-rules、task continuity、decision/blocker。
 
 ### 当前代码结构
 
@@ -1555,6 +1720,15 @@ npm run dev -- <args>
 src/cli.ts
 src/search.ts
 src/brief.ts
+src/guard.ts
+src/project-map.ts
+src/reflect.ts
+src/ingest.ts
+src/apply.ts
+src/lint.ts
+src/graph.ts
+src/promote-rules.ts
+src/task.ts
 src/output.ts
 src/provider.ts
 src/init.ts
@@ -1576,9 +1750,25 @@ tests/wiki-store.test.ts
 tests/log.test.ts
 tests/search.test.ts
 tests/brief.test.ts
+tests/guard.test.ts
+tests/project-map.test.ts
+tests/reflect.test.ts
+tests/ingest.test.ts
+tests/apply.test.ts
+tests/lint.test.ts
+tests/graph.test.ts
+tests/promote-rules.test.ts
+tests/task.test.ts
 AGENTS.md
 implementation-m1-m2.md
 implementation-m3.md
+implementation-m4.md
+implementation-m5.md
+implementation-m6.md
+implementation-m7.md
+implementation-m8.md
+implementation-m9.md
+implementation-m10.md
 ```
 
 架构约定：
@@ -1590,6 +1780,15 @@ implementation-m3.md
 * `src/init.ts` 只做初始化流程编排，不再承载大量硬编码模板。
 * `src/search.ts` 承载本地检索逻辑，命令层只负责参数解析和输出。
 * `src/brief.ts` 承载 Development Brief 生成、输出写入、log/eval 追加。
+* `src/guard.ts` 承载文件护栏生成、相关页面合并、排序和输出。
+* `src/project-map.ts` 承载项目扫描、Project Map 生成和受控写入。
+* `src/reflect.ts` 承载 notes / git diff 读取、changed files 提取和复盘 preview 生成。
+* `src/ingest.ts` 承载 raw note 保存、Markdown 解析和 ingest preview 生成。
+* `src/apply.ts` 承载 `WikiUpdatePlan` 校验、apply preview、确认式 wiki 写入、index 重建、log 追加和 graph 重建。
+* `src/lint.ts` 承载 wiki 健康检查、容错扫描、Markdown 链接解析和报告格式化。
+* `src/graph.ts` 承载 graph nodes / edges 构建、backlinks 生成和 graph 文件写入。
+* `src/promote-rules.ts` 承载规则升级候选生成、过滤、排序和输出。
+* `src/task.ts` 承载任务创建、列表、状态、checkpoint、decision、blocker、resume 和关闭。
 
 ### 已验证
 
@@ -1615,47 +1814,119 @@ Test Files  7 passed (7)
 Tests       19 passed (19)
 ```
 
-额外 smoke test 已通过：使用构建后的 `dist/cli.js` 在临时目录运行 `init --project-name smoke`、`search stripe --format json`、`brief "stripe webhook"`，可以完成初始化、检索并生成 no-LLM Development Brief。
+M4 最新验收结果：
+
+```text
+Test Files  9 passed (9)
+Tests       27 passed (27)
+```
+
+M5 最新验收结果：
+
+```text
+Test Files  11 passed (11)
+Tests       33 passed (33)
+```
+
+M6 最新验收结果：
+
+```text
+Test Files  13 passed (13)
+Tests       37 passed (37)
+```
+
+M7 最新验收结果：
+
+```text
+Test Files  14 passed (14)
+Tests       40 passed (40)
+```
+
+M8 最新验收结果：
+
+```text
+Test Files  15 passed (15)
+Tests       44 passed (44)
+```
+
+M9 最新验收结果：
+
+```text
+Test Files  15 passed (15)
+Tests       45 passed (45)
+```
+
+M10 最新验收结果：
+
+```text
+Test Files  16 passed (16)
+Tests       49 passed (49)
+```
+
+额外 smoke test 已通过：
+
+```bash
+node dist/cli.js init --project-name smoke
+node dist/cli.js task start "Context task" --id context-task --format json
+node dist/cli.js decision "Use preview-first writes" --module tasks --format json
+node dist/cli.js blocker "Need confirmation before agent rule writes" --severity high --format json
+node dist/cli.js resume --format json
+```
+
+该 smoke test 已在临时目录中通过，验证 `init`、任务创建、decision、blocker、resume 可以串起来使用。
+
+M10 额外 smoke test 已通过：
+
+```bash
+node dist/cli.js init --project-name smoke
+node dist/cli.js apply plan.json
+node dist/cli.js apply plan.json --confirm --format json
+```
+
+该 smoke test 已在临时目录中通过，验证 apply preview、confirmed JSON apply 和页面写入可以串起来使用。
 
 ### 尚未实现
 
 以下用户命令尚未实现：
 
 ```bash
-aiwiki guard
-aiwiki reflect
-aiwiki ingest
-aiwiki lint
-aiwiki graph build
-aiwiki task start
-aiwiki checkpoint
-aiwiki resume
-aiwiki task close
+自动 PRD checklist 解析
 ```
 
 以下能力仍待后续补齐：
 
-* 完整 index 自动重建。
-* 通用写入 preview/diff 工作流。
-* Guardrails 查询。
-* Reflect 写入 preview 和确认流程。
-* Graph build / backlinks。
-* 任务连续性与新会话接力系统。
+* Reflect / Ingest 自动生成完整可执行 `WikiUpdatePlan` 草案。
+* `aiwiki apply` 的 diff-style preview。
+* 交互式确认 UI。
+* 智能 merge 已有 wiki 页面。
+* `lint --fix` 低风险修复。
+* graph related / hotspots / conflicts。
+* agent 规则文件同步确认流程。
+* 任务连续性的 PRD checklist 增强。
 * LLM provider 抽象的实际调用。
 
 ### 下一步开发建议
 
 如果目标是让 AIWiki 尽快被 Codex / Claude Code / Cursor 用起来，下一步建议优先实现：
 
-1. `aiwiki guard <file>`：复用搜索和 wiki filtering，根据文件路径输出护栏。
-2. `aiwiki map`：生成项目地图，识别技术栈、主要目录、模块和高风险文件。
-3. `aiwiki task start / checkpoint / resume`：结合第 37 节，让新会话可以继续开发，不重复造轮子。
-4. `aiwiki reflect --from-git-diff`：开始补开发后复盘和结构化更新建议。
+1. 让 `reflect --format json` 输出可保存的 `WikiUpdatePlan` 草案。
+2. 让 `ingest --format json` 输出可保存的 `WikiUpdatePlan` 草案。
+3. 为 `aiwiki apply` 增加更清晰的 diff-style preview。
+4. 任务连续性增强：PRD checklist 基础维护。
+5. `aiwiki lint --fix`：仅修复 index/backlinks/格式等低风险问题。
 
 新会话继续开发前，应先阅读：
 
 * `prd.md`
 * `implementation-m1-m2.md`
+* `implementation-m3.md`
+* `implementation-m4.md`
+* `implementation-m5.md`
+* `implementation-m6.md`
+* `implementation-m7.md`
+* `implementation-m8.md`
+* `implementation-m9.md`
+* `implementation-m10.md`
 * `AGENTS.md`
 * `src/constants.ts`
 * `src/wiki-store.ts`

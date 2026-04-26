@@ -77,3 +77,63 @@ export interface LogEntry {
   date?: string;
   bullets?: string[];
 }
+
+export type GraphNodeType = WikiPageType | "file" | "session";
+
+export type GraphEdgeType =
+  | "relates_to"
+  | "applies_to"
+  | "fixed_by"
+  | "caused_by"
+  | "supersedes"
+  | "conflicts_with"
+  | "promoted_from"
+  | "references_file";
+
+export interface GraphNode {
+  id: string;
+  type: GraphNodeType;
+  label: string;
+  path?: string;
+  status?: string;
+  severity?: string;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  type: GraphEdgeType;
+  source?: string;
+}
+
+export interface GraphJson {
+  version: string;
+  generated_at: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export type TaskStatus = "in_progress" | "done" | "paused" | "cancelled";
+
+export interface TaskMetadata {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  created_at: string;
+  updated_at: string;
+  closed_at?: string;
+  prd?: string;
+}
+
+export interface TaskCheckpoint {
+  time: string;
+  type: "checkpoint" | "decision" | "blocker";
+  message?: string;
+  step?: string;
+  status?: string;
+  tests?: string[];
+  next?: string[];
+  files?: string[];
+  module?: string;
+  severity?: RiskLevel;
+}
