@@ -73,6 +73,10 @@ describe("generateRulePromotionPreview", () => {
     ]);
     expect(result.preview.candidates[0]?.requiresConfirmation).toBe(true);
     expect(result.preview.updatePlan?.entries[0]?.type).toBe("rule");
+    expect(result.preview.updatePlanDraft?.entries[0]).toMatchObject({
+      type: "rule",
+      source: "promote-rules"
+    });
     expect(result.preview.updatePlan?.entries[0]?.frontmatter).toEqual({
       source_pitfalls: ["wiki/pitfalls/stripe-raw-body.md"],
       encountered_count: 3

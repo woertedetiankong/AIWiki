@@ -42,6 +42,13 @@ const wikiUpdateRiskLevelSchema = z.enum([
   "critical"
 ]);
 
+const wikiUpdateSourceSchema = z.enum([
+  "reflect",
+  "ingest",
+  "promote-rules",
+  "manual"
+]);
+
 const safeSlugSchema = z
   .string()
   .min(1)
@@ -64,6 +71,7 @@ export const wikiUpdatePlanEntrySchema = z.object({
   tags: z.array(z.string().min(1)).optional(),
   severity: wikiUpdateRiskLevelSchema.optional(),
   risk: wikiUpdateRiskLevelSchema.optional(),
+  source: wikiUpdateSourceSchema.optional(),
   frontmatter: z.record(z.string(), z.unknown()).optional(),
   summary: z.string().optional(),
   body: z.string().optional(),
@@ -77,6 +85,7 @@ export const wikiUpdatePlanSchema = z.object({
 });
 
 export type WikiUpdatePageType = z.infer<typeof wikiUpdatePageTypeSchema>;
+export type WikiUpdateSource = z.infer<typeof wikiUpdateSourceSchema>;
 export type WikiUpdatePlanEntry = z.infer<typeof wikiUpdatePlanEntrySchema>;
 export type WikiUpdatePlan = z.infer<typeof wikiUpdatePlanSchema>;
 
@@ -87,7 +96,14 @@ export interface WikiUpdateOperation {
   title: string;
   path: string;
   action: WikiUpdateAction;
+  source?: WikiUpdateSource;
   reason: string;
+  frontmatterPreview?: Record<string, unknown>;
+  bodyPreview?: string;
+  appendPreview?: Array<{
+    heading: string;
+    bodyPreview: string;
+  }>;
 }
 
 export interface WikiUpdatePreview {
@@ -310,6 +326,29 @@ function appendContent(entry: WikiUpdatePlanEntry): string {
     .join("");
 }
 
+function previewText(value: string, maxLength = 1200): string {
+  const normalized = value.trimEnd();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength).trimEnd()}\n...`;
+}
+
+function createFrontmatterPreview(entry: WikiUpdatePlanEntry): Record<string, unknown> {
+  return frontmatterForEntry({
+    ...entry,
+    status: entry.status ?? defaultStatus(entry.type)
+  }) as unknown as Record<string, unknown>;
+}
+
+function appendPreview(entry: WikiUpdatePlanEntry): WikiUpdateOperation["appendPreview"] {
+  return (entry.append ?? []).map((section) => ({
+    heading: section.heading.trim(),
+    bodyPreview: previewText(section.body)
+  }));
+}
+
 function planFromUnknown(value: unknown): WikiUpdatePlan {
   const plan = wikiUpdatePlanSchema.parse(value);
   for (const entry of plan.entries) {
@@ -348,7 +387,10 @@ function operationForEntry(
       title: entry.title,
       path: relativePath,
       action: "create",
-      reason: "Target wiki page does not exist."
+      source: entry.source,
+      reason: "Target wiki page does not exist.",
+      frontmatterPreview: createFrontmatterPreview(entry),
+      bodyPreview: previewText(templateBody(entry))
     };
   }
 
@@ -358,7 +400,9 @@ function operationForEntry(
       title: entry.title,
       path: relativePath,
       action: "append",
-      reason: "Target wiki page exists and explicit append sections were provided."
+      source: entry.source,
+      reason: "Target wiki page exists and explicit append sections were provided.",
+      appendPreview: appendPreview(entry)
     };
   }
 
@@ -367,6 +411,7 @@ function operationForEntry(
     title: entry.title,
     path: relativePath,
     action: "skip",
+    source: entry.source,
     reason: "Target wiki page already exists and no explicit append sections were provided."
   };
 }
@@ -467,12 +512,47 @@ async function regenerateIndex(rootDir: string, config: AIWikiConfig): Promise<v
 }
 
 function formatOperation(operation: WikiUpdateOperation): string {
-  return [
+  const lines = [
     `- ${operation.action}: ${operation.path}`,
     `  - Type: ${operation.type}`,
     `  - Title: ${operation.title}`,
+    `  - Source: ${operation.source ?? "manual"}`,
     `  - Reason: ${operation.reason}`
-  ].join("\n");
+  ];
+
+  if (operation.frontmatterPreview) {
+    lines.push("  - Frontmatter Preview:");
+    for (const [key, value] of Object.entries(operation.frontmatterPreview)) {
+      lines.push(`    - ${key}: ${JSON.stringify(value)}`);
+    }
+  }
+
+  if (operation.bodyPreview) {
+    lines.push("  - Body Preview:");
+    lines.push("    ```md");
+    lines.push(
+      ...operation.bodyPreview
+        .split("\n")
+        .map((line) => `    ${line}`)
+    );
+    lines.push("    ```");
+  }
+
+  if (operation.appendPreview && operation.appendPreview.length > 0) {
+    lines.push("  - Append Preview:");
+    for (const section of operation.appendPreview) {
+      lines.push(`    - Heading: ${section.heading}`);
+      lines.push("      ```md");
+      lines.push(
+        ...section.bodyPreview
+          .split("\n")
+          .map((line) => `      ${line}`)
+      );
+      lines.push("      ```");
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export function formatWikiUpdateApplyMarkdown(

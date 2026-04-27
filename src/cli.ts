@@ -201,6 +201,8 @@ program
   .option("--from-git-diff", "Read the current git diff", false)
   .option("--notes <path>", "Read user notes from a project-local Markdown file")
   .option("--limit <n>", "Maximum number of related wiki pages to include")
+  .option("--output-plan <path>", "Write the update plan draft to a project-local JSON file")
+  .option("--force", "Overwrite the output plan if it already exists", false)
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
@@ -208,6 +210,8 @@ program
         fromGitDiff?: boolean;
         notes?: string;
         limit?: string;
+        outputPlan?: string;
+        force?: boolean;
         format?: string;
       }
     ) => {
@@ -215,7 +219,9 @@ program
       const result = await generateReflectPreview(process.cwd(), {
         fromGitDiff: options.fromGitDiff,
         notes: options.notes,
-        limit: parsePositiveInteger(options.limit)
+        limit: parsePositiveInteger(options.limit),
+        outputPlan: options.outputPlan,
+        force: options.force
       });
 
       process.stdout.write(format === "json" ? result.json : result.markdown);
@@ -226,18 +232,25 @@ program
   .command("ingest")
   .description("Preserve a raw Markdown note and generate no-LLM wiki suggestions.")
   .argument("<file>", "Project-local Markdown note to ingest")
-  .option("--force", "Overwrite the raw note copy if its destination exists", false)
+  .option("--force", "Overwrite the raw note copy and output plan if either destination exists", false)
   .option("--limit <n>", "Maximum number of related wiki pages to include")
+  .option("--output-plan <path>", "Write the update plan draft to a project-local JSON file")
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
       file: string,
-      options: { force?: boolean; limit?: string; format?: string }
+      options: {
+        force?: boolean;
+        limit?: string;
+        outputPlan?: string;
+        format?: string;
+      }
     ) => {
       const format = parseOutputFormat(options.format);
       const result = await generateIngestPreview(process.cwd(), file, {
         force: options.force,
-        limit: parsePositiveInteger(options.limit)
+        limit: parsePositiveInteger(options.limit),
+        outputPlan: options.outputPlan
       });
 
       process.stdout.write(format === "json" ? result.json : result.markdown);

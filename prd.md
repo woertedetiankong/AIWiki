@@ -71,6 +71,16 @@ AIWiki 应该区分：
 
 Codex 可能已经有计划模式。AIWiki 不替代 Codex 的实现计划。AIWiki 负责生成 Development Brief，也就是项目记忆驱动的任务简报；Codex 基于这个 brief 再生成代码执行层面的实现计划。
 
+### 4.5 AIWiki 不替代 Agent 工作流技能
+
+AIWiki 与 Superpowers、Codex skills、Claude Code commands 等 agent 工作流工具应保持清晰边界。
+
+AIWiki 负责项目长期记忆和上下文工程：检索历史经验、生成 Development Brief、提供文件 guardrails、记录任务接力信息、开发后 reflect 并生成 wiki 更新建议。
+
+Agent 工作流技能负责当前会话的开发纪律：需求澄清、brainstorming、实现计划、TDD、debugging、subagent dispatch、code review、verification、branch 收尾和 PR 发布。
+
+因此 AIWiki 不应该发展成另一套 Superpowers。尤其不要让 AIWiki 负责生成完整代码编辑步骤、调度 subagent、强制 TDD 流程、管理 PR 发布或替代当前 agent 的 review / verification 机制。AIWiki 的输出应该作为这些流程的输入，而不是取代这些流程。
+
 ---
 
 ## 5. 目标用户
@@ -115,6 +125,17 @@ MVP 要解决 4 个核心问题：
 2. 支持 deep-context 模式，用递归探索或大上下文切片方式分析超大知识库。
 3. 支持 GEPA / eval 驱动的 prompt 优化，自动优化 ingest、context、reflect、rule promotion 等流程。
 4. 支持跨项目经验迁移。
+
+### 6.4 持续优化目标
+
+AIWiki 不应该只是一次性生成 brief / guard / reflect 的 CLI。长期目标是让它成为一个越用越好的项目记忆系统：
+
+1. 记忆质量随真实开发使用增长：每次 reflect、ingest、apply、lint、brief feedback 都能让 wiki 更准确。
+2. brief / guard / reflect 的相关性可评估、可调参、可回归测试。
+3. 重复踩坑率、brief 命中率、guard 有效性、reflect 建议接受率成为长期产品指标。
+4. 检索排序、prompt 模板、规则升级建议可以基于 eval 数据持续优化。
+5. 知识生命周期可管理：重要经验被强化，过期经验被标记，矛盾知识被暴露。
+6. 仍保持 local-first、preview-first、confirmed apply，不用牺牲用户信任换自动化。
 
 ---
 
@@ -1118,7 +1139,11 @@ interface LLMProvider {
 
 ## 17. 检索策略
 
-### 17.1 MVP 检索
+AIWiki 需要检索。没有检索，工具会退化成“把所有 Markdown 塞给模型”，既浪费上下文，也容易让过期或无关记忆污染 Codex / Claude Code 的判断。
+
+但高级检索不是 MVP 前提。AIWiki 的检索路线应分阶段演进，先把结构化项目记忆和反馈闭环做好，再替换更强的检索后端。
+
+### 17.1 MVP 检索：Markdown + frontmatter + keyword
 
 输入任务或查询后：
 
@@ -1126,28 +1151,45 @@ interface LLMProvider {
 2. 扫描 `.aiwiki/wiki/**/*.md`。
 3. 基于标题、frontmatter、文件路径、正文关键词打分。
 4. 优先 active、高 severity、高 encountered_count、相关 module 的页面。
-5. 返回 top N 页面给 LLM 汇总。
+5. 返回 top N 页面给 brief / guard / reflect / ingest 使用。
 
-### 17.2 排序建议
+### 17.2 结构化检索增强
 
-打分因素：
+下一阶段在不引入重型依赖的前提下增强排序：
 
-* 标题匹配：+5
-* frontmatter module 匹配：+4
-* 文件路径匹配：+4
-* 正文关键词匹配：+2
-* severity high/critical：+2
-* status deprecated：-5
-* encountered_count：最高 +3
-* 最近更新：最高 +2
+* 标题匹配：高权重。
+* frontmatter `modules`、`files`、`tags` 精确匹配：高权重。
+* `severity` / `risk` high、critical：加权。
+* `status: deprecated`：降权，但不完全隐藏。
+* `encountered_count`、`last_encountered`、`last_used`：影响排序。
+* graph neighbors：从文件、模块、pitfall、decision、rule 扩展相关页面。
+* 去重：同一坑或同一规则只保留最有代表性的页面。
+* 相关性反馈：记录用户认为 brief 缺失、过长、无关或有帮助的上下文。
 
-### 17.3 后续升级
+### 17.3 可插拔检索后端
 
-* SQLite FTS
-* BM25
-* 向量搜索
-* 图谱扩展检索
-* RLM deep-context
+后续可增加可选检索后端，但不能成为默认云依赖：
+
+* SQLite FTS / BM25：本地全文检索，适合中型 wiki。
+* 向量搜索 / embedding：可选能力，适合语义相似度和跨项目经验迁移。
+* 图谱扩展检索：结合 `graph.json` 扩展模块、文件和决策关系。
+* deep-context / recursive retrieval：针对大型 `.aiwiki/` 做多轮探索。
+
+### 17.4 与外部项目的关系
+
+`claude-context` 证明了代码语义检索对 AI coding agent 很有价值，尤其在大代码库中可以减少无效上下文。但 AIWiki 的第一优先级不是做“全代码库语义搜索”，而是做项目记忆检索：pitfall、decision、pattern、rule、module summary、task resume。
+
+`memory-lancedb-pro` 证明了长期记忆需要混合检索、去噪、去重、分层、作用域和生命周期管理。AIWiki 可以借鉴这些设计，但写入仍必须保持 preview-first 和用户确认。
+
+### 17.5 检索验收指标
+
+长期需要记录：
+
+* brief 选中的页面是否被 Codex / Claude Code 实际用到。
+* guard 是否命中了高风险文件的关键 pitfall / rule。
+* reflect 是否找到了应该更新的已有页面。
+* ingest 是否避免了重复创建 pitfall / decision / rule。
+* 用户是否标记结果为 helpful、missing_context、too_long、wrong_context。
 
 ---
 
@@ -1267,7 +1309,26 @@ After completing a task:
 2. Do not promote rules without user confirmation.
 ```
 
-### 20.3 MCP 集成，后续
+### 20.3 与 Superpowers / Agent Skills 协作
+
+当用户同时使用 Superpowers 或类似 agent workflow skills 时，推荐流程：
+
+1. 开发前运行 `aiwiki brief "<task>"`，把项目记忆、历史坑、风险文件和验收标准提供给 agent。
+2. 由 Superpowers `brainstorming` 澄清需求，`writing-plans` 生成实现计划。
+3. 修改高风险文件前运行 `aiwiki guard <file>`。
+4. 实现过程中由 agent workflow 负责 TDD、debugging、review、verification 和 subagent 协作。
+5. 完成验证后运行 `aiwiki reflect --from-git-diff`，把本次开发中可复用的经验转成 wiki 更新建议。
+6. 用户确认后再通过 `aiwiki apply --confirm` 写入 `.aiwiki/`。
+
+职责边界：
+
+* `aiwiki brief` 不生成完整 implementation plan，只提供项目记忆输入。
+* `aiwiki task/checkpoint/resume` 记录项目级任务状态，不调度 subagent，也不替代当前会话执行器。
+* `aiwiki guard` 提供历史风险和规则，不替代 TDD、debugging 或 code review。
+* `aiwiki reflect/ingest` 负责知识沉淀，不负责 merge、PR、branch cleanup 或发布流程。
+* 后续 `deep-context / investigate` 应深挖 `.aiwiki/` 长期记忆和趋势，不做通用 bug 调试器。
+
+### 20.4 MCP 集成，后续
 
 MCP tools：
 
@@ -1315,36 +1376,85 @@ risk_score = critical_pitfalls * 5 + high_pitfalls * 3 + decisions * 1 + recent_
 
 ---
 
-## 22. GEPA / 自优化路线
+## 22. 持续学习与自优化路线
 
-MVP 不实现 GEPA，但从第一天收集 eval 数据。
+MVP 不实现 GEPA / RLM / 自动 prompt 替换，但从第一天收集 eval 数据。AIWiki 的长期方向是形成一个闭环：真实开发越多，记忆越准，检索越好，brief / guard / reflect 越有用。
 
-后续可以用 GEPA 优化：
+### 22.1 持续学习闭环
 
-1. `brief` prompt
-2. `reflect` prompt
-3. `guard` prompt
-4. `ingest` prompt
-5. `promote-rules` prompt
-6. tool descriptions
+```text
+1. brief / guard / search 选择相关项目记忆
+2. Codex / Claude Code 基于上下文完成任务
+3. reflect / ingest 生成 updatePlanDraft
+4. 用户审核并通过 apply confirmed 写入
+5. 新记忆参与下一次 brief / guard / search
+6. eval 记录哪些上下文有用、缺失、过长或误导
+7. optimize 基于真实反馈改进 prompt、排序权重和模板
+```
 
-需要先积累：
+### 22.2 Eval 数据来源
 
-* 真实任务
-* 生成的 brief
-* 用户反馈
-* Codex 开发结果
-* 是否重复踩坑
-* 用户对 reflect 的接受/拒绝记录
+需要长期积累：
+
+* 真实任务描述。
+* 生成的 brief / guard / reflect / ingest 输出。
+* 被选中的 wiki pages。
+* 用户是否采用 brief。
+* Codex / Claude Code 开发结果。
+* 用户反馈：helpful、missing_context、too_long、wrong_context、unknown。
+* reflect 建议的接受 / 修改 / 拒绝记录。
+* apply 写入的 create / append / skip 结果。
+* 后续是否重复踩同一个 pitfall。
+
+### 22.3 可优化对象
+
+后续可以优化：
+
+1. `brief` prompt、章节顺序、token budget。
+2. `guard` 输出顺序和高风险提示。
+3. `reflect` / `ingest` 的 update-plan 草案质量。
+4. `promote-rules` 的规则升级阈值。
+5. 检索排序权重。
+6. `graph` 邻居扩展策略。
+7. MCP tool descriptions。
+
+### 22.4 Optimize 命令
 
 后续命令：
 
 ```bash
 aiwiki optimize brief
 aiwiki optimize reflect
+aiwiki optimize retrieval
+aiwiki feedback brief --case <id> --outcome helpful
+aiwiki feedback context --case <id> --outcome missing_context
 ```
 
-该命令应生成 prompt 候选和评估报告，不应自动替换生产 prompt，除非用户确认。
+这些命令应生成 prompt / ranking / template 候选和评估报告，不应自动替换生产配置，除非用户确认。
+
+### 22.5 记忆生命周期
+
+后续 wiki frontmatter 可扩展以下字段：
+
+```yaml
+confidence: 0.8
+importance: high
+source_count: 3
+last_seen: 2026-04-26
+last_used: 2026-04-26
+stale_after: 2026-10-26
+promoted_from:
+  - ../pitfalls/example.md
+```
+
+生命周期规则：
+
+* `proposed`：由 reflect / ingest / promote-rules 生成，等待确认。
+* `active`：可被 brief / guard 正常使用。
+* `uncertain`：有用但证据不足，展示时要降低置信度。
+* `deprecated`：保留历史，但默认降权。
+* 高频、高严重度、高采用率的 pitfall 可以建议升级为 rule。
+* 长期未使用或被新 decision supersede 的页面应被 lint 标记。
 
 ---
 
@@ -1358,6 +1468,9 @@ MVP 不实现 RLM。
 aiwiki deep-context "分析 auth 模块为什么总出问题"
 aiwiki investigate "过去三个月支付模块反复出现什么问题"
 ```
+AIWiki 的 Deep Context 借鉴 RLM 类系统的递归检索、上下文外置、子问题分解和轨迹记录思想，但不直接依赖特定 RLM 开源实现。AIWiki 的版本应围绕本地 `.aiwiki/` 的 module、pitfall、decision、pattern、rule、task log 和 graph 做多轮探索、证据汇总和开发建议生成。
+
+该能力不是普通 search 的替代品。普通 search 返回相关页面；deep-context / investigate 应在知识库较大、问题跨多个模块或需要分析长期趋势时使用。输出应包含探索路径、引用的记忆页面、主要发现、风险判断和可选 updatePlanDraft。所有写入仍必须走 preview-first 和 `aiwiki apply --confirm`。
 
 适用场景：
 
@@ -1463,12 +1576,14 @@ JSON 模式用于未来 MCP / 插件集成。
 
 * `aiwiki reflect --from-git-diff` 能读取 git diff。
 * 能生成复盘建议和 confirmed apply workflow 提示。
+* `--format json` 能输出可直接交给 `aiwiki apply` 预览的 `updatePlanDraft`。
 * 默认不写入长期 wiki 页面。
 
 ### 28.5 Ingest
 
 * `aiwiki ingest <file>` 能导入旧 Markdown。
 * 能生成结构化 pitfall 建议。
+* `--format json` 能输出可直接交给 `aiwiki apply` 预览的 `updatePlanDraft`。
 * 默认只保存 raw note 和输出建议，不直接写结构化 wiki 页面。
 
 ### 28.6 Apply
@@ -1548,6 +1663,62 @@ JSON 模式用于未来 MCP / 插件集成。
 * index / log / graph 维护
 * reflect / ingest / promote-rules 对接 apply workflow
 
+### Milestone 11：Reflect / Ingest Update Plan Draft
+
+* `reflect` 输出 `updatePlanDraft`
+* `ingest` 输出 `updatePlanDraft`
+* `promote-rules` 统一 `updatePlanDraft`
+* `apply` preview 显示 entry source
+* 轻量结构化检索增强
+
+### Milestone 12：Apply Preview 与 Plan 保存
+
+* `aiwiki apply` diff-style preview
+* `reflect --output-plan <path>`
+* `ingest --output-plan <path>`
+* update plan 草案可编辑、可复用、可审计
+
+### Milestone 13：记忆质量与生命周期
+
+* 扩展 wiki frontmatter：`confidence`、`importance`、`source_count`、`last_seen`、`last_used`、`stale_after`
+* lifecycle lint：stale、duplicate、conflict、low-confidence
+* rule promotion / decision deprecation 继续保持用户确认
+
+### Milestone 14：检索反馈与 Retrieval Tuning
+
+* `aiwiki feedback` 记录 brief / guard / context 反馈
+* 根据反馈调优 keyword / frontmatter / graph 权重
+* 输出 retrieval eval report
+* 避免引入默认云依赖
+
+### Milestone 15：MCP Server
+
+* 暴露 `get_development_brief`
+* 暴露 `get_file_guardrails`
+* 暴露 `search_project_memory`
+* 暴露 `reflect_after_changes`
+* 支持 Codex / Claude Code / Cursor 直接调用
+
+### Milestone 16：本地全文检索后端
+
+* 可选 SQLite FTS / BM25 backend
+* 保留 Markdown scan 作为默认 fallback
+* 支持索引状态和重建命令
+
+### Milestone 17：可选语义检索后端
+
+* 可选 embedding / vector backend
+* 可选本地或用户显式配置的远程 provider
+* 不默认上传代码、diff、wiki 或用户 notes
+* 用于语义相似 pitfall、跨项目迁移和 deep-context
+
+### Milestone 18：跨项目经验迁移与 Deep Context
+
+* 跨项目相似 pitfall / pattern 查询
+* deep-context / investigate 命令
+* 大型 `.aiwiki/` 递归探索
+* 迁移建议仍通过 preview / apply confirmed 写入
+
 ---
 
 ## 29.1 当前实现状态（2026-04-26）
@@ -1556,7 +1727,7 @@ JSON 模式用于未来 MCP / 插件集成。
 
 ### 已完成
 
-当前仓库已经完成 AIWiki 的 M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9 + M10 基础架构、搜索 / Brief、Guard / Map、Reflect / Ingest preview、Lint / Graph、规则升级 preview、任务连续性 MVP、decision/blocker 记录与确认式 Wiki 写入工作流实现：
+当前仓库已经完成 AIWiki 的 M1 + M2 + M3 + M4 + M5 + M6 + M7 + M8 + M9 + M10 + M11 + M12 基础架构、搜索 / Brief、Guard / Map、Reflect / Ingest update-plan preview、Lint / Graph、规则升级 preview、任务连续性 MVP、decision/blocker 记录、确认式 Wiki 写入工作流、update plan 草案生成、草案保存与 diff-style apply preview 实现：
 
 * Node.js + npm + TypeScript ESM 项目骨架。
 * CLI 框架，已实现 `aiwiki init`、`aiwiki search`、`aiwiki brief`、`aiwiki guard`、`aiwiki map`、`aiwiki reflect`、`aiwiki ingest`、`aiwiki apply`、`aiwiki lint`、`aiwiki graph build`、`aiwiki promote-rules`、`aiwiki task start/list/status/close`、`aiwiki checkpoint`、`aiwiki resume`、`aiwiki decision`、`aiwiki blocker`。
@@ -1580,9 +1751,13 @@ aiwiki map --write --force
 aiwiki reflect
 aiwiki reflect --notes notes/today.md
 aiwiki reflect --from-git-diff
+aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.json
+aiwiki reflect --notes notes/today.md --output-plan .aiwiki/context-packs/reflect-plan.json --force
 aiwiki reflect --format json
 aiwiki ingest <file>
 aiwiki ingest <file> --force
+aiwiki ingest <file> --output-plan .aiwiki/context-packs/ingest-plan.json
+aiwiki ingest <file> --output-plan .aiwiki/context-packs/ingest-plan.json --force
 aiwiki ingest <file> --format json
 aiwiki apply <plan.json>
 aiwiki apply <plan.json> --confirm
@@ -1635,6 +1810,9 @@ npm run dev -- <args>
   * `--confirm` 后才创建或追加页面。
   * 新页面使用不覆盖写入，已存在页面默认 skip。
   * 已存在页面只有提供显式 `append` sections 时才追加。
+  * entry 可标记 `source: reflect | ingest | promote-rules | manual`。
+  * preview operation 会显示 source，方便审查写入建议来源。
+  * dry-run preview 会显示 create 的 frontmatter / body preview、append 的追加 section preview、skip 的跳过原因。
   * confirmed apply 后重建 `.aiwiki/index.md`、追加 `.aiwiki/log.md`，默认重建 graph。
   * `--no-graph` 可跳过 graph 重建。
 * `log.md` 初始化和 append 基础能力。
@@ -1667,6 +1845,12 @@ npm run dev -- <args>
   * 从 git diff 中提取 changed files。
   * 使用 notes 和 changed files 检索相关 wiki pages。
   * 输出 Task Summary、New Lessons、Pitfalls、Modules、Decisions、Patterns、Rules、Files Changed in `.aiwiki`。
+  * JSON 输出包含 `updatePlanDraft` 草案。
+  * 支持 `--output-plan <path>` 将 `updatePlanDraft` 保存为可直接交给 `aiwiki apply <plan.json>` 的 JSON 文件。
+  * `--output-plan` 默认不覆盖已有文件，`--force` 可覆盖，且路径必须在项目根目录内。
+  * 已匹配相关 pitfall / decision / pattern 时，优先生成 append entry。
+  * 高风险 changed files 且没有匹配 pitfall 时，生成 pitfall 候选。
+  * 根据 changed file path 推断模块候选时扫描整条路径并过滤低信号 token。
   * 默认不写结构化 wiki 页面。
   * 输出 confirmed apply workflow 提示，引导用户把接受的建议转成 `WikiUpdatePlan` 后通过 `aiwiki apply --confirm` 写入。
 * `aiwiki ingest` no-LLM 旧笔记导入 preview：
@@ -1675,6 +1859,11 @@ npm run dev -- <args>
   * 默认不覆盖已有 raw note，同名文件会生成递增文件名。
   * `--force` 可覆盖 raw note copy。
   * 根据 note 内容检索相关 wiki pages，并输出结构化建议。
+  * JSON 输出包含 `updatePlanDraft` 草案。
+  * 支持 `--output-plan <path>` 将 `updatePlanDraft` 保存为可直接交给 `aiwiki apply <plan.json>` 的 JSON 文件。
+  * `--output-plan` 默认不覆盖已有文件，`--force` 可覆盖，且路径必须在项目根目录内。
+  * 已匹配相关 wiki page 时，优先生成 append entry，避免盲目创建重复页面。
+  * 无匹配页面时，根据 note 内容关键词生成 pitfall / decision / pattern / rule 候选。
   * 不自动新增 pitfall、module、decision、pattern 或 rule 页面。
   * 输出 confirmed apply workflow 提示，引导用户把接受的建议转成 `WikiUpdatePlan` 后通过 `aiwiki apply --confirm` 写入。
 * `aiwiki lint` 知识库健康检查：
@@ -1693,7 +1882,7 @@ npm run dev -- <args>
   * 默认选择 `severity: high | critical`、`encountered_count >= 2`、非 deprecated 的 pitfall。
   * 支持 `--min-count <n>` 调整重复次数阈值。
   * 输出 rule title、rule body、why、applies to、source pitfalls、suggested targets、requires confirmation。
-  * JSON preview 中包含 rule `updatePlan` 草案。
+  * JSON preview 中包含 rule `updatePlan` / `updatePlanDraft` 草案。
   * 根据 config `rulesTargets` 建议 `wiki/rules`、`AGENTS.md`、`CLAUDE.md`、`.cursor/rules`。
   * 只输出 preview 和 update-plan 草案，不自动创建 rule 页面，不修改 agent 规则文件。
 * 任务连续性与新会话接力 MVP：
@@ -1710,7 +1899,7 @@ npm run dev -- <args>
 * 轻量 LLM Provider 接口已预留，但本阶段不调用远程模型。
 * 受控写入策略：默认不覆盖已有文件，`--force` 只刷新 AIWiki 管理的默认模板文件。
 * 根目录 `AGENTS.md`，用于约束本项目后续开发规范：可扩展、少硬编码、保护用户数据。
-* 测试覆盖 init、config、markdown、wiki-store、log、search、brief、guard、project-map、reflect、ingest、apply、lint、graph、promote-rules、task continuity、decision/blocker。
+* 测试覆盖 init、config、markdown、wiki-store、log、search、brief、guard、project-map、reflect update-plan draft、ingest update-plan draft、apply、lint、graph、promote-rules、task continuity、decision/blocker。
 
 ### 当前代码结构
 
@@ -1769,6 +1958,8 @@ implementation-m7.md
 implementation-m8.md
 implementation-m9.md
 implementation-m10.md
+implementation-m11.md
+implementation-m12.md
 ```
 
 架构约定：
@@ -1782,9 +1973,9 @@ implementation-m10.md
 * `src/brief.ts` 承载 Development Brief 生成、输出写入、log/eval 追加。
 * `src/guard.ts` 承载文件护栏生成、相关页面合并、排序和输出。
 * `src/project-map.ts` 承载项目扫描、Project Map 生成和受控写入。
-* `src/reflect.ts` 承载 notes / git diff 读取、changed files 提取和复盘 preview 生成。
-* `src/ingest.ts` 承载 raw note 保存、Markdown 解析和 ingest preview 生成。
-* `src/apply.ts` 承载 `WikiUpdatePlan` 校验、apply preview、确认式 wiki 写入、index 重建、log 追加和 graph 重建。
+* `src/reflect.ts` 承载 notes / git diff 读取、changed files 提取、复盘 preview、`updatePlanDraft` 生成和 output plan 保存。
+* `src/ingest.ts` 承载 raw note 保存、Markdown 解析、ingest preview、`updatePlanDraft` 生成和 output plan 保存。
+* `src/apply.ts` 承载 `WikiUpdatePlan` 校验、diff-style apply preview、operation source 展示、确认式 wiki 写入、index 重建、log 追加和 graph 重建。
 * `src/lint.ts` 承载 wiki 健康检查、容错扫描、Markdown 链接解析和报告格式化。
 * `src/graph.ts` 承载 graph nodes / edges 构建、backlinks 生成和 graph 文件写入。
 * `src/promote-rules.ts` 承载规则升级候选生成、过滤、排序和输出。
@@ -1798,6 +1989,7 @@ implementation-m10.md
 npm run typecheck
 npm run test
 npm run build
+git diff --check
 ```
 
 M1+M2 历史结果：
@@ -1863,6 +2055,20 @@ Test Files  16 passed (16)
 Tests       49 passed (49)
 ```
 
+M11 最新验收结果：
+
+```text
+Test Files  16 passed (16)
+Tests       51 passed (51)
+```
+
+M12 最新验收结果：
+
+```text
+Test Files  16 passed (16)
+Tests       55 passed (55)
+```
+
 额外 smoke test 已通过：
 
 ```bash
@@ -1895,13 +2101,17 @@ node dist/cli.js apply plan.json --confirm --format json
 
 以下能力仍待后续补齐：
 
-* Reflect / Ingest 自动生成完整可执行 `WikiUpdatePlan` 草案。
-* `aiwiki apply` 的 diff-style preview。
+* 记忆质量字段和 lifecycle lint。
+* 检索反馈记录和 retrieval tuning。
 * 交互式确认 UI。
 * 智能 merge 已有 wiki 页面。
 * `lint --fix` 低风险修复。
 * graph related / hotspots / conflicts。
 * agent 规则文件同步确认流程。
+* MCP Server。
+* 可选 SQLite FTS / BM25 backend。
+* 可选 embedding / vector backend。
+* 跨项目经验迁移与 deep-context。
 * 任务连续性的 PRD checklist 增强。
 * LLM provider 抽象的实际调用。
 
@@ -1909,11 +2119,17 @@ node dist/cli.js apply plan.json --confirm --format json
 
 如果目标是让 AIWiki 尽快被 Codex / Claude Code / Cursor 用起来，下一步建议优先实现：
 
-1. 让 `reflect --format json` 输出可保存的 `WikiUpdatePlan` 草案。
-2. 让 `ingest --format json` 输出可保存的 `WikiUpdatePlan` 草案。
-3. 为 `aiwiki apply` 增加更清晰的 diff-style preview。
-4. 任务连续性增强：PRD checklist 基础维护。
-5. `aiwiki lint --fix`：仅修复 index/backlinks/格式等低风险问题。
+1. 记忆质量字段和 lifecycle lint。
+2. `aiwiki lint --fix`：仅修复 index/backlinks/格式等低风险问题。
+3. graph related / hotspots / conflicts。
+4. 检索反馈记录与 retrieval tuning。
+5. 任务连续性增强：PRD checklist 基础维护。
+6. 交互式确认 UI。
+7. agent 规则文件同步确认流程。
+8. MCP Server。
+9. 可选 SQLite FTS / BM25 backend。
+10. 可选 embedding / vector backend。
+11. 跨项目经验迁移与 deep-context。
 
 新会话继续开发前，应先阅读：
 
@@ -1927,6 +2143,8 @@ node dist/cli.js apply plan.json --confirm --format json
 * `implementation-m8.md`
 * `implementation-m9.md`
 * `implementation-m10.md`
+* `implementation-m11.md`
+* `implementation-m12.md`
 * `AGENTS.md`
 * `src/constants.ts`
 * `src/wiki-store.ts`
@@ -1969,10 +2187,13 @@ aiwiki mcp
 4. 不要引入重型数据库。
 5. 不要把 brief 做成 Codex 的实现计划。
 6. brief 是 Codex 的上游任务简报。
-7. 保持 provider 可替换。
-8. 保持 prompt 模板可编辑。
-9. 对用户数据保持本地优先和透明。
-10. 先做可用 MVP，再做 GEPA / RLM / MCP。
+7. 不要把 AIWiki 做成 Superpowers / Claude Code commands / agent workflow pack 的替代品。
+8. task / checkpoint / resume 只记录项目级状态，不负责执行计划或调度 subagent。
+9. guard / reflect / deep-context 只提供项目记忆、风险和知识沉淀，不替代 TDD、debugging、review、verification 或 PR 发布流程。
+10. 保持 provider 可替换。
+11. 保持 prompt 模板可编辑。
+12. 对用户数据保持本地优先和透明。
+13. 先做可用 MVP，再做 GEPA / RLM / MCP。
 
 ---
 
@@ -2079,6 +2300,18 @@ MVP 成功指标：
 5. 高风险文件修改前能看到相关 guardrails。
 6. 用户参与集中在确认方向和规则，而不是整理文档。
 
+长期成功指标：
+
+1. brief 相关性随项目使用次数提升，用户标记 `helpful` 的比例上升。
+2. Codex / Claude Code 因缺少历史上下文导致的返工减少。
+3. 同一 pitfall 的重复发生次数下降，或在再次发生前被 guard 命中。
+4. 高风险文件修改前，guard 能稳定召回关键 rule / pitfall / decision。
+5. reflect / ingest 生成的 updatePlanDraft 被用户接受或少量修改后接受的比例上升。
+6. 用户手工整理历史踩坑 Markdown 的时间下降。
+7. 知识库重复、过期、冲突、孤立页面数量下降。
+8. 检索排序可通过 eval report 解释和回归测试。
+9. 跨新会话、跨 AI coding agent 的任务接力成功率提升。
+
 ---
 
 ## 35. 未来扩展
@@ -2097,7 +2330,7 @@ MVP 成功指标：
 
 ### 35.4 GEPA 自优化
 
-使用真实 eval case 优化 prompt。
+使用真实 eval case 优化 prompt、tool descriptions、输出模板和排序权重。
 
 ### 35.5 RLM Deep Context
 
@@ -2106,6 +2339,28 @@ MVP 成功指标：
 ### 35.6 跨项目记忆
 
 从其他项目中迁移相似经验。
+
+### 35.7 Memory Lifecycle
+
+管理记忆的置信度、重要性、使用频率、过期时间和规则升级状态。该能力用于让 AIWiki 不只是积累内容，也能持续降低噪音和过期知识。
+
+### 35.8 Retrieval Backend
+
+在保持 Markdown-first 的同时，提供可插拔检索后端：
+
+* 默认：Markdown scan + frontmatter + keyword scoring。
+* 可选：SQLite FTS / BM25。
+* 可选：embedding / vector backend。
+
+任何远程 embedding 或向量库都必须由用户显式配置，不作为默认路径。
+
+### 35.9 Feedback 与 Eval UI
+
+后续可以提供简单 CLI 或插件入口，让用户标记 brief / guard / reflect 输出是否有用，并把反馈写入 `.aiwiki/evals/`。
+
+### 35.10 与外部生态的差异化
+
+`claude-context` 偏代码语义检索，适合回答“代码在哪里”。`memory-lancedb-pro` 偏 agent memory，适合回答“对话里记住了什么”。AIWiki 的定位是 repo-local project memory compiler，适合回答“这个项目为什么这样做、历史上哪里踩过坑、当前任务应该带哪些项目记忆”。
 
 ---
 

@@ -105,7 +105,8 @@ export type {
   WikiUpdatePageType,
   WikiUpdatePlan,
   WikiUpdatePlanEntry,
-  WikiUpdatePreview
+  WikiUpdatePreview,
+  WikiUpdateSource
 } from "./apply.js";
 export type {
   BacklinksJson,

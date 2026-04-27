@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import {
   formatReflectPreviewMarkdown,
   generateReflectPreview
 } from "../src/reflect.js";
+import { applyWikiUpdatePlan } from "../src/apply.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -88,6 +89,18 @@ describe("generateReflectPreview", () => {
     expect(result.markdown).toContain("Auth route permission checks");
     expect(result.markdown).toContain("No structured wiki writes are planned");
     expect(result.preview.selectedDocs).toContain("wiki/pitfalls/auth-permissions.md");
+    expect(result.preview.updatePlanDraft?.entries[0]).toMatchObject({
+      type: "pitfall",
+      source: "reflect",
+      slug: "auth-permissions"
+    });
+
+    const dryRun = await applyWikiUpdatePlan(
+      rootDir,
+      result.preview.updatePlanDraft
+    );
+    expect(dryRun.preview.operations[0]?.action).toBe("append");
+    expect(dryRun.preview.operations[0]?.source).toBe("reflect");
   });
 
   it("reads git diff and detects changed high-risk files", async () => {
@@ -117,6 +130,94 @@ describe("generateReflectPreview", () => {
     );
   });
 
+  it("generates module and pitfall draft entries from high-risk changed files", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(
+      rootDir,
+      "src/app/api/auth/route.ts",
+      "export const value = 1;\n"
+    );
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+    await writeProjectFile(
+      rootDir,
+      "src/app/api/auth/route.ts",
+      "export const value = 2;\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true
+    });
+
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "module", modules: ["auth"] }),
+        expect.objectContaining({
+          type: "pitfall",
+          files: ["src/app/api/auth/route.ts"],
+          source: "reflect"
+        })
+      ])
+    );
+  });
+
+  it("writes an output plan draft without overwriting unless force is set", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Auth rule\n\nAuth routes must check permissions server-side.\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      outputPlan: ".aiwiki/context-packs/reflect-plan.json"
+    });
+
+    expect(result.preview.outputPlanPath).toBe(
+      path.join(rootDir, ".aiwiki/context-packs/reflect-plan.json")
+    );
+    expect(result.markdown).toContain("aiwiki apply");
+    const plan = JSON.parse(
+      await readFile(
+        path.join(rootDir, ".aiwiki/context-packs/reflect-plan.json"),
+        "utf8"
+      )
+    ) as { entries: Array<{ source?: string }> };
+    expect(plan.entries[0]?.source).toBe("reflect");
+
+    await expect(
+      generateReflectPreview(rootDir, {
+        notes: "notes/today.md",
+        outputPlan: ".aiwiki/context-packs/reflect-plan.json"
+      })
+    ).rejects.toThrow("Refusing to overwrite existing output plan");
+
+    await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      outputPlan: ".aiwiki/context-packs/reflect-plan.json",
+      force: true
+    });
+  });
+
+  it("rejects output plan paths outside the project root", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Auth rule\n\nAuth routes must check permissions server-side.\n"
+    );
+
+    await expect(
+      generateReflectPreview(rootDir, {
+        notes: "notes/today.md",
+        outputPlan: "../outside.json"
+      })
+    ).rejects.toThrow("Refusing to access path outside project root");
+  });
+
   it("formats markdown and json output", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -126,7 +227,11 @@ describe("generateReflectPreview", () => {
       "# Reflect Preview"
     );
 
-    const parsed = JSON.parse(result.json) as { projectName: string };
+    const parsed = JSON.parse(result.json) as {
+      projectName: string;
+      updatePlanDraft?: unknown;
+    };
     expect(parsed.projectName).toBe("demo");
+    expect(parsed.updatePlanDraft).toBeUndefined();
   });
 });

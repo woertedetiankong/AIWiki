@@ -27,6 +27,7 @@ export interface RulePromotionPreview {
   minCount: number;
   candidates: RulePromotionCandidate[];
   updatePlan?: WikiUpdatePlan;
+  updatePlanDraft?: WikiUpdatePlan;
   skipped: string[];
   safety: string[];
 }
@@ -201,6 +202,7 @@ function updatePlanForCandidates(
     entries: candidates.map((candidate) => ({
       type: "rule",
       title: candidate.title.replace(/^Rule:\s*/iu, ""),
+      source: "promote-rules",
       status: "proposed",
       modules: candidate.appliesTo.modules,
       files: candidate.appliesTo.files,
@@ -238,7 +240,7 @@ export function formatRulePromotionPreviewMarkdown(
 
   lines.push(
     "## Update Plan Draft",
-    preview.updatePlan
+    preview.updatePlanDraft
       ? "- Save the JSON output and run `aiwiki apply <plan.json> --confirm` after reviewing the rule text."
       : "- No update plan draft was generated.",
     "",
@@ -279,10 +281,12 @@ export async function generateRulePromotionPreview(
       return a.title.localeCompare(b.title);
     });
 
+  const updatePlanDraft = updatePlanForCandidates(candidates);
   const preview: RulePromotionPreview = {
     minCount,
     candidates,
-    updatePlan: updatePlanForCandidates(candidates),
+    updatePlan: updatePlanDraft,
+    updatePlanDraft,
     skipped: skippedPitfalls(pages, minCount),
     safety: [
       "This preview does not write wiki/rules pages.",

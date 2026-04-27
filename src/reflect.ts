@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { promisify } from "node:util";
 import { loadAIWikiConfig } from "./config.js";
 import { RISK_FILE_KEYWORDS } from "./constants.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
+import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
+import type { WikiPage } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,6 +16,8 @@ export interface ReflectOptions {
   fromGitDiff?: boolean;
   notes?: string;
   limit?: number;
+  outputPlan?: string;
+  force?: boolean;
 }
 
 export interface ReflectSection {
@@ -26,6 +31,8 @@ export interface ReflectPreview {
   notesPath?: string;
   changedFiles: string[];
   selectedDocs: string[];
+  outputPlanPath?: string;
+  updatePlanDraft?: WikiUpdatePlan;
   sections: ReflectSection[];
 }
 
@@ -38,8 +45,46 @@ export interface ReflectResult {
 const DEFAULT_REFLECT_LIMIT = 8;
 const MAX_QUERY_TEXT = 600;
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
 function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function safeSlug(value: string, fallbackValue: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  if (slug.length > 0) {
+    return slug;
+  }
+
+  let hash = 0;
+  for (const char of value) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 100000;
+  }
+
+  return `${fallbackValue}-${hash}`;
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[-_\s]+/u)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function normalizeChangedFile(filePath: string): string {
@@ -90,12 +135,28 @@ function firstNonEmptyLine(value: string): string | undefined {
 }
 
 function pathModuleCandidates(files: string[]): string[] {
+  const lowSignalParts = new Set([
+    "src",
+    "app",
+    "api",
+    "lib",
+    "route",
+    "page",
+    "index",
+    "server",
+    "client",
+    "components"
+  ]);
   return unique(
     files.flatMap((file) => {
-      const parts = file.split("/");
-      return [parts[0], parts[1]];
+      const parsed = toPosixPath(file)
+        .replace(/\.[^.]+$/u, "")
+        .split(/[/.\\_-]+/u)
+        .map((part) => part.trim().toLowerCase())
+        .filter((part) => part.length > 2 && !lowSignalParts.has(part));
+      return parsed;
     })
-  ).filter((part) => part !== "src" && part !== "app" && part !== "lib");
+  );
 }
 
 function relatedModules(results: SearchResult[], files: string[]): string[] {
@@ -124,6 +185,28 @@ function matchingTitles(results: SearchResult[], type: string): string[] {
     .map((result) => `${result.title} (wiki/${result.page.relativePath})`);
 }
 
+function pagesOfType(results: SearchResult[], type: string): WikiPage[] {
+  return results
+    .filter((result) => result.page.frontmatter.type === type)
+    .map((result) => result.page);
+}
+
+function pageTitle(page: WikiPage): string {
+  if (page.frontmatter.title && page.frontmatter.title.trim().length > 0) {
+    return page.frontmatter.title;
+  }
+
+  const heading = page.body
+    .split("\n")
+    .find((line) => line.trim().startsWith("#"));
+
+  return heading ? heading.replace(/^#+\s*/u, "").trim() : page.relativePath;
+}
+
+function pageSlug(page: WikiPage): string {
+  return page.relativePath.split("/").at(-1)?.replace(/\.md$/u, "") ?? safeSlug(pageTitle(page), "page");
+}
+
 function highRiskChangedFiles(files: string[]): string[] {
   return files.filter((file) => {
     const value = file.toLowerCase();
@@ -141,6 +224,145 @@ function fallback(items: string[], value: string): string[] {
   return items.length > 0 ? items : [value];
 }
 
+function includesAny(value: string, words: string[]): boolean {
+  const normalizedValue = value.toLowerCase();
+  return words.some((word) => normalizedValue.includes(word));
+}
+
+function appendEntryForPage(
+  page: WikiPage,
+  noteSummary: string | undefined,
+  changedFiles: string[]
+): WikiUpdatePlanEntry {
+  const summary = noteSummary ?? "Reflect reviewed recent changes for this existing memory page.";
+  return {
+    type: page.frontmatter.type as WikiUpdatePlanEntry["type"],
+    title: pageTitle(page),
+    slug: pageSlug(page),
+    source: "reflect",
+    append: [
+      {
+        heading: "Recent Reflection",
+        body: [
+          summary,
+          changedFiles.length > 0
+            ? `Changed files reviewed: ${changedFiles.join(", ")}.`
+            : undefined,
+          "Review this append section before confirming the wiki update."
+        ].filter(Boolean).join("\n\n")
+      }
+    ]
+  };
+}
+
+function buildReflectUpdatePlanDraft(
+  noteSummary: string | undefined,
+  notes: string,
+  changedFiles: string[],
+  results: SearchResult[],
+  modules: string[],
+  riskyFiles: string[]
+): WikiUpdatePlan | undefined {
+  const entries: WikiUpdatePlanEntry[] = [];
+  const matchedPages = pagesOfType(results, "pitfall")
+    .concat(pagesOfType(results, "decision"))
+    .concat(pagesOfType(results, "pattern"))
+    .slice(0, 3);
+
+  for (const page of matchedPages) {
+    entries.push(appendEntryForPage(page, noteSummary, changedFiles));
+  }
+
+  const existingModuleNames = new Set(
+    pagesOfType(results, "module").flatMap((page) => [
+      ...(page.frontmatter.modules ?? []),
+      page.frontmatter.title,
+      pageTitle(page)
+    ])
+  );
+
+  for (const moduleName of modules.filter((moduleName) => !existingModuleNames.has(moduleName)).slice(0, 3)) {
+    entries.push({
+      type: "module",
+      title: titleCase(moduleName),
+      slug: safeSlug(moduleName, "module"),
+      source: "reflect",
+      modules: [moduleName],
+      files: changedFiles,
+      summary: noteSummary
+        ? `Reflection candidate from recent work: ${noteSummary}.`
+        : "Reflection candidate from recent changed files."
+    });
+  }
+
+  if (riskyFiles.length > 0 && pagesOfType(results, "pitfall").length === 0) {
+    const baseTitle = noteSummary ?? `${titleCase(modules[0] ?? "Project")} high-risk file change`;
+    entries.push({
+      type: "pitfall",
+      title: baseTitle,
+      slug: safeSlug(baseTitle, "pitfall"),
+      source: "reflect",
+      modules,
+      files: riskyFiles,
+      severity: "high",
+      summary: "Review whether this high-risk file change introduced a reusable pitfall before confirming."
+    });
+  }
+
+  if (noteSummary && includesAny(notes, ["decision", "decided", "choose", "chose", "use ", "使用", "决定"])) {
+    entries.push({
+      type: "decision",
+      title: noteSummary,
+      slug: safeSlug(noteSummary, "decision"),
+      source: "reflect",
+      modules,
+      files: changedFiles,
+      summary: "Review whether this note records a durable product or architecture decision."
+    });
+  }
+
+  if (noteSummary && includesAny(notes, ["pattern", "reuse", "reusable", "步骤", "模式", "复用"])) {
+    entries.push({
+      type: "pattern",
+      title: noteSummary,
+      slug: safeSlug(noteSummary, "pattern"),
+      source: "reflect",
+      modules,
+      files: changedFiles,
+      summary: "Review whether this note describes a reusable implementation pattern."
+    });
+  }
+
+  if (noteSummary && includesAny(notes, ["must", "never", "always", "required", "必须", "不要", "总是"])) {
+    entries.push({
+      type: "rule",
+      title: noteSummary,
+      slug: safeSlug(noteSummary, "rule"),
+      source: "reflect",
+      status: "proposed",
+      modules,
+      files: changedFiles,
+      severity: riskyFiles.length > 0 ? "high" : "medium",
+      summary: "Review whether this lesson is stable enough to become a proposed project rule."
+    });
+  }
+
+  const dedupedEntries = entries.filter((entry, index, allEntries) => {
+    const key = `${entry.type}:${entry.slug ?? entry.title}`;
+    return allEntries.findIndex((candidate) => `${candidate.type}:${candidate.slug ?? candidate.title}` === key) === index;
+  });
+
+  if (dedupedEntries.length === 0) {
+    return undefined;
+  }
+
+  return {
+    version: "0.1.0",
+    title: noteSummary ? `Reflect: ${noteSummary}` : "Reflect update candidates",
+    entries: dedupedEntries
+  };
+}
+
 function section(title: string, items: string[]): ReflectSection {
   return { title, items };
 }
@@ -150,10 +372,18 @@ function formatSection(value: ReflectSection): string {
 }
 
 export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
+  const draftLine = preview.updatePlanDraft
+    ? preview.outputPlanPath
+      ? `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Saved to ${preview.outputPlanPath}. Run \`aiwiki apply ${preview.outputPlanPath}\`, then \`aiwiki apply ${preview.outputPlanPath} --confirm\` after review.`
+      : `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Save with \`--output-plan <path>\` or save the JSON output, then run \`aiwiki apply <plan.json>\` before \`--confirm\`.`
+    : "- No update plan draft was generated.";
   return [
     "# Reflect Preview",
     "",
     ...preview.sections.flatMap((value) => [formatSection(value), ""]),
+    "## Update Plan Draft",
+    draftLine,
+    "",
     "## Safety",
     "- This preview does not write structured wiki pages.",
     "- Review and confirm reusable lessons before adding pitfalls, modules, decisions, patterns, or rules."
@@ -162,6 +392,22 @@ export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
 
 function reflectToJson(preview: ReflectPreview): string {
   return `${JSON.stringify(preview, null, 2)}\n`;
+}
+
+async function writeOutputPlanFile(
+  rootDir: string,
+  outputPlan: string,
+  plan: WikiUpdatePlan,
+  force: boolean
+): Promise<string> {
+  const outputPath = resolveProjectPath(rootDir, outputPlan);
+  if (!force && (await pathExists(outputPath))) {
+    throw new Error(`Refusing to overwrite existing output plan: ${outputPlan}`);
+  }
+
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  return outputPath;
 }
 
 export async function generateReflectPreview(
@@ -194,6 +440,14 @@ export async function generateReflectPreview(
     notesPath: options.notes,
     changedFiles,
     selectedDocs,
+    updatePlanDraft: buildReflectUpdatePlanDraft(
+      noteSummary,
+      notes,
+      changedFiles,
+      results,
+      modules,
+      riskyFiles
+    ),
     sections: [
       section(
         "Task Summary",
@@ -269,6 +523,15 @@ export async function generateReflectPreview(
       )
     ]
   };
+
+  if (options.outputPlan && preview.updatePlanDraft) {
+    preview.outputPlanPath = await writeOutputPlanFile(
+      rootDir,
+      options.outputPlan,
+      preview.updatePlanDraft,
+      options.force ?? false
+    );
+  }
 
   const markdown = formatReflectPreviewMarkdown(preview);
   const json = reflectToJson(preview);

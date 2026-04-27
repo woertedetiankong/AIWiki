@@ -5,10 +5,14 @@ import { RAW_NOTES_DIR } from "./constants.js";
 import { parseMarkdown } from "./markdown.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
+import type { SearchResult } from "./search.js";
+import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
+import type { WikiPage } from "./types.js";
 
 export interface IngestOptions {
   force?: boolean;
   limit?: number;
+  outputPlan?: string;
 }
 
 export interface IngestSection {
@@ -20,6 +24,8 @@ export interface IngestPreview {
   sourcePath: string;
   rawNotePath: string;
   selectedDocs: string[];
+  outputPlanPath?: string;
+  updatePlanDraft?: WikiUpdatePlan;
   sections: IngestSection[];
 }
 
@@ -35,6 +41,23 @@ const MAX_SEARCH_TEXT = 800;
 
 function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function safeSlug(value: string, fallbackValue: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  if (slug.length > 0) {
+    return slug;
+  }
+
+  let hash = 0;
+  for (const char of value) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 100000;
+  }
+
+  return `${fallbackValue}-${hash}`;
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -105,6 +128,22 @@ function firstBodyLine(body: string): string | undefined {
     .find((line) => line.length > 0 && !line.startsWith("#"));
 }
 
+function pageTitle(page: WikiPage): string {
+  if (page.frontmatter.title && page.frontmatter.title.trim().length > 0) {
+    return page.frontmatter.title;
+  }
+
+  const heading = page.body
+    .split("\n")
+    .find((line) => line.trim().startsWith("#"));
+
+  return heading ? heading.replace(/^#+\s*/u, "").trim() : page.relativePath;
+}
+
+function pageSlug(page: WikiPage): string {
+  return page.relativePath.split("/").at(-1)?.replace(/\.md$/u, "") ?? safeSlug(pageTitle(page), "page");
+}
+
 function frontmatterList(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
@@ -127,6 +166,109 @@ function inferTags(raw: string): string[] {
   return tags.filter((tag) => value.includes(tag));
 }
 
+function includesAny(value: string, words: string[]): boolean {
+  const normalizedValue = value.toLowerCase();
+  return words.some((word) => normalizedValue.includes(word));
+}
+
+function appendEntryForPage(
+  page: WikiPage,
+  title: string,
+  excerpt: string | undefined,
+  rawNotePath: string
+): WikiUpdatePlanEntry {
+  return {
+    type: page.frontmatter.type as WikiUpdatePlanEntry["type"],
+    title: pageTitle(page),
+    slug: pageSlug(page),
+    source: "ingest",
+    append: [
+      {
+        heading: "Ingested Note",
+        body: [
+          `Source note: ${rawNotePath}.`,
+          `Candidate summary: ${title}.`,
+          excerpt,
+          "Review this append section before confirming the wiki update."
+        ].filter(Boolean).join("\n\n")
+      }
+    ]
+  };
+}
+
+function entryTypeForNote(raw: string): WikiUpdatePlanEntry["type"] {
+  if (includesAny(raw, ["decision", "decided", "choose", "chose", "决定", "选择"])) {
+    return "decision";
+  }
+  if (includesAny(raw, ["pattern", "reuse", "reusable", "模式", "复用"])) {
+    return "pattern";
+  }
+  if (includesAny(raw, ["must", "never", "always", "required", "必须", "不要", "总是"])) {
+    return "rule";
+  }
+  return "pitfall";
+}
+
+function severityForNote(raw: string): WikiUpdatePlanEntry["severity"] {
+  if (includesAny(raw, ["critical", "security", "secret", "token", "auth", "payment", "webhook", "严重", "安全"])) {
+    return "critical";
+  }
+  if (includesAny(raw, ["bug", "error", "failed", "pitfall", "错误", "失败", "踩坑"])) {
+    return "high";
+  }
+  return "medium";
+}
+
+function buildIngestUpdatePlanDraft(
+  title: string,
+  raw: string,
+  rawNotePath: string,
+  modules: string[],
+  files: string[],
+  tags: string[],
+  excerpt: string | undefined,
+  results: SearchResult[]
+): WikiUpdatePlan {
+  const existingPages = results
+    .map((result) => result.page)
+    .filter((page) =>
+      page.frontmatter.type === "pitfall" ||
+      page.frontmatter.type === "decision" ||
+      page.frontmatter.type === "pattern" ||
+      page.frontmatter.type === "rule" ||
+      page.frontmatter.type === "module"
+    )
+    .slice(0, 3);
+  const entries: WikiUpdatePlanEntry[] = existingPages.map((page) =>
+    appendEntryForPage(page, title, excerpt, rawNotePath)
+  );
+
+  if (entries.length === 0) {
+    const type = entryTypeForNote(raw);
+    entries.push({
+      type,
+      title,
+      slug: safeSlug(title, type),
+      source: "ingest",
+      status: type === "rule" ? "proposed" : "active",
+      modules,
+      files,
+      tags,
+      severity: type === "pitfall" || type === "rule" ? severityForNote(raw) : undefined,
+      frontmatter: {
+        source_notes: [rawNotePath]
+      },
+      summary: excerpt ?? `Candidate imported from ${rawNotePath}.`
+    });
+  }
+
+  return {
+    version: "0.1.0",
+    title: `Ingest: ${title}`,
+    entries
+  };
+}
+
 function fallback(items: string[], value: string): string[] {
   return items.length > 0 ? items : [value];
 }
@@ -140,10 +282,18 @@ function formatSection(value: IngestSection): string {
 }
 
 export function formatIngestPreviewMarkdown(preview: IngestPreview): string {
+  const draftLine = preview.updatePlanDraft
+    ? preview.outputPlanPath
+      ? `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Saved to ${preview.outputPlanPath}. Run \`aiwiki apply ${preview.outputPlanPath}\`, then \`aiwiki apply ${preview.outputPlanPath} --confirm\` after review.`
+      : `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Save with \`--output-plan <path>\` or save the JSON output, then run \`aiwiki apply <plan.json>\` before \`--confirm\`.`
+    : "- No update plan draft was generated.";
   return [
     `# Ingest Preview: ${preview.sourcePath}`,
     "",
     ...preview.sections.flatMap((value) => [formatSection(value), ""]),
+    "## Update Plan Draft",
+    draftLine,
+    "",
     "## Safety",
     "- The raw source note was preserved without creating structured wiki pages.",
     "- Review these suggestions before adding pitfalls, modules, decisions, patterns, or rules."
@@ -154,12 +304,48 @@ function ingestToJson(preview: IngestPreview): string {
   return `${JSON.stringify(preview, null, 2)}\n`;
 }
 
+async function writeOutputPlanFile(
+  rootDir: string,
+  outputPlan: string,
+  plan: WikiUpdatePlan,
+  force: boolean
+): Promise<string> {
+  const outputPath = resolveProjectPath(rootDir, outputPlan);
+  if (!force && (await pathExists(outputPath))) {
+    throw new Error(`Refusing to overwrite existing output plan: ${outputPlan}`);
+  }
+
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+  return outputPath;
+}
+
+async function assertOutputPlanWritable(
+  rootDir: string,
+  outputPlan: string | undefined,
+  force: boolean
+): Promise<void> {
+  if (!outputPlan) {
+    return;
+  }
+
+  const outputPath = resolveProjectPath(rootDir, outputPlan);
+  if (!force && (await pathExists(outputPath))) {
+    throw new Error(`Refusing to overwrite existing output plan: ${outputPlan}`);
+  }
+}
+
 export async function generateIngestPreview(
   rootDir: string,
   sourcePath: string,
   options: IngestOptions = {}
 ): Promise<IngestResult> {
   await loadAIWikiConfig(rootDir);
+  await assertOutputPlanWritable(
+    rootDir,
+    options.outputPlan,
+    options.force ?? false
+  );
   const normalizedSourcePath = normalizeInputPath(rootDir, sourcePath);
   const sourceAbsolutePath = resolveProjectPath(rootDir, normalizedSourcePath);
   const raw = await readFile(sourceAbsolutePath, "utf8");
@@ -202,6 +388,16 @@ export async function generateIngestPreview(
     sourcePath: normalizedSourcePath,
     rawNotePath,
     selectedDocs,
+    updatePlanDraft: buildIngestUpdatePlanDraft(
+      title,
+      raw,
+      rawNotePath,
+      modules,
+      files,
+      tags,
+      excerpt,
+      search.results
+    ),
     sections: [
       section("Source Summary", [
         `Title: ${title}`,
@@ -258,6 +454,15 @@ export async function generateIngestPreview(
       )
     ]
   };
+
+  if (options.outputPlan && preview.updatePlanDraft) {
+    preview.outputPlanPath = await writeOutputPlanFile(
+      rootDir,
+      options.outputPlan,
+      preview.updatePlanDraft,
+      options.force ?? false
+    );
+  }
 
   const markdown = formatIngestPreviewMarkdown(preview);
   const json = ingestToJson(preview);
