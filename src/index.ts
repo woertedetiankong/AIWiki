@@ -1,4 +1,7 @@
 export {
+  generateArchitectureBriefContext
+} from "./architecture.js";
+export {
   applyWikiUpdatePlan,
   formatWikiUpdateApplyMarkdown,
   generateWikiUpdatePreview,
@@ -11,6 +14,11 @@ export {
   BRIEF_EVALS_PATH,
   AIWIKI_DIR,
   AIWIKI_VERSION,
+  ARCHITECTURE_HARDCODING_TOPICS,
+  ARCHITECTURE_LARGE_FILE_LINE_THRESHOLD,
+  ARCHITECTURE_PORTABILITY_CHECKS,
+  ARCHITECTURE_SCAN_EXCLUDED_PATHS,
+  ARCHITECTURE_SOURCE_FILE_EXTENSIONS,
   CONFIG_PATH,
   DEFAULT_IGNORE,
   DEFAULT_RULE_PROMOTION_MIN_COUNT,
@@ -97,6 +105,10 @@ export {
   startTask,
   TASK_FILES
 } from "./task.js";
+export type {
+  ArchitectureBriefContext,
+  ArchitectureBriefOptions
+} from "./architecture.js";
 export type {
   WikiUpdateAction,
   WikiUpdateApplyOptions,

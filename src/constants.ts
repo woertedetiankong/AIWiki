@@ -125,3 +125,55 @@ export const RISK_FILE_KEYWORDS = [
   "secret",
   "token"
 ] as const;
+
+export const ARCHITECTURE_LARGE_FILE_LINE_THRESHOLD = 400;
+
+export const ARCHITECTURE_SCAN_EXCLUDED_PATHS = [
+  AIWIKI_DIR,
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  ".next",
+  "coverage"
+] as const;
+
+export const ARCHITECTURE_SOURCE_FILE_EXTENSIONS = [
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".mts",
+  ".cts",
+  ".py",
+  ".rb",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".swift",
+  ".php",
+  ".cs"
+] as const;
+
+export const ARCHITECTURE_HARDCODING_TOPICS = [
+  "secrets",
+  "environment variables",
+  "URLs",
+  "pricing",
+  "provider names",
+  "status mappings",
+  "business constants",
+  "file paths"
+] as const;
+
+export const ARCHITECTURE_PORTABILITY_CHECKS = [
+  "module entry points",
+  "configuration keys",
+  "external provider assumptions",
+  "data model or migration requirements",
+  "required tests",
+  "setup and rollback steps"
+] as const;

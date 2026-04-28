@@ -1,5 +1,6 @@
 import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { generateArchitectureBriefContext } from "./architecture.js";
 import { BRIEF_EVALS_PATH, INDEX_PATH } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
 import { appendLogEntry } from "./log.js";
@@ -217,6 +218,11 @@ export async function generateDevelopmentBrief(
   const modules = relatedModules(results);
   const riskFiles = highRiskFiles(results, config.riskFiles);
   const readFiles = mustReadFiles(results, riskFiles);
+  const architecture = await generateArchitectureBriefContext(rootDir, task, {
+    modules,
+    highRiskFiles: riskFiles,
+    ignorePatterns: config.ignore
+  });
 
   const brief: DevelopmentBrief = {
     task,
@@ -250,6 +256,22 @@ export async function generateDevelopmentBrief(
           "Keep the implementation plan inside the coding agent session; this brief should not be treated as exact edit instructions.",
           "Prefer existing project conventions and local Markdown workflow before adding new infrastructure."
         ]
+      },
+      {
+        title: "Architecture Boundaries",
+        items: architecture.architectureBoundaries
+      },
+      {
+        title: "Hardcoding and Configuration Risks",
+        items: architecture.hardcodingRisks
+      },
+      {
+        title: "Portability Checklist",
+        items: architecture.portabilityChecklist
+      },
+      {
+        title: "Module Memory to Maintain",
+        items: architecture.moduleMemoryToMaintain
       },
       {
         title: "Relevant Modules",

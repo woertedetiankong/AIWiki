@@ -17,7 +17,10 @@ export function defaultAgentsMd(): string {
 Before starting a non-trivial task:
 1. Run or ask the user to run \`aiwiki brief "<task>"\`.
 2. Treat the brief as project memory and constraints.
-3. Create your own implementation plan before editing code.
+3. Confirm module boundaries, configuration boundaries, and portability risks before editing code.
+4. Create your own implementation plan before editing code.
+5. Do not hardcode provider names, secrets, URLs, pricing, status mappings, business constants, or file paths in business logic.
+6. Keep reusable modules small enough to migrate: separate provider adapters, API/webhook handling, persistence, UI, configuration, and tests.
 
 Before editing a high-risk file:
 1. Run \`aiwiki guard <file>\`.
@@ -26,6 +29,7 @@ Before editing a high-risk file:
 After completing a task:
 1. Run or ask the user to run \`aiwiki reflect --from-git-diff\`.
 2. Do not promote rules without user confirmation.
+3. Preserve durable module boundaries, patterns, pitfalls, decisions, and rules that would help future migrations.
 `;
 }
 
@@ -77,6 +81,8 @@ Rules:
 - Do not generate concrete code implementation steps.
 - Do not replace the coding agent's implementation plan.
 - Surface user questions, historical pitfalls, project rules, risk files, and acceptance criteria.
+- Surface module boundaries, hardcoding/configuration risks, portability checks, and module memory to maintain.
+- Warn when a task risks mixing provider SDK calls, API/webhook handling, persistence, UI, and configuration in one file.
 - Remind the coding agent to create its own implementation plan before editing code.
 `,
   "reflect.md": `# AIWiki Reflect Prompt

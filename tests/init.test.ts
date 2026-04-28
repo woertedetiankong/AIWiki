@@ -53,6 +53,10 @@ describe("initAIWiki", () => {
 
     const promptPath = path.join(rootDir, ".aiwiki", "prompts", "brief.md");
     await writeFile(promptPath, "custom prompt\n", "utf8");
+    const agentsPath = path.join(rootDir, ".aiwiki", "AGENTS.md");
+    await writeFile(agentsPath, "custom agents\n", "utf8");
+    const logPath = path.join(rootDir, ".aiwiki", "log.md");
+    await writeFile(logPath, "custom log\n", "utf8");
 
     const result = await initAIWiki({
       rootDir,
@@ -61,10 +65,14 @@ describe("initAIWiki", () => {
     });
 
     expect(result.overwritten).toContain(".aiwiki/prompts/brief.md");
+    expect(result.overwritten).toContain(".aiwiki/AGENTS.md");
     expect(await readFile(extraPath, "utf8")).toBe("# Extra\n");
     expect(await readFile(promptPath, "utf8")).toContain(
       "# AIWiki Brief Prompt"
     );
+    expect(await readFile(promptPath, "utf8")).toContain("module boundaries");
+    expect(await readFile(agentsPath, "utf8")).toContain("Do not hardcode");
+    expect(await readFile(logPath, "utf8")).toBe("custom log\n");
 
     const config = await loadAIWikiConfig(rootDir);
     expect(config.projectName).toBe("renamed");

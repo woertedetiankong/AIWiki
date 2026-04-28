@@ -94,6 +94,59 @@ describe("generateDevelopmentBrief", () => {
     expect(evals).toContain("\"task\":\"stripe webhook\"");
   });
 
+  it("includes architecture, hardcoding, portability, and module memory guidance by default", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addRelevantMemory(rootDir);
+
+    await mkdir(path.join(rootDir, "src", "app", "api", "stripe", "webhook"), {
+      recursive: true
+    });
+    await writeFile(
+      path.join(rootDir, "src", "app", "api", "stripe", "webhook", "route.ts"),
+      Array.from({ length: 430 }, (_, index) => `export const line${index} = ${index};`).join("\n"),
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "add stripe payment provider webhook"
+    );
+
+    expect(result.markdown).toContain("## Architecture Boundaries");
+    expect(result.markdown).toContain("## Hardcoding and Configuration Risks");
+    expect(result.markdown).toContain("## Portability Checklist");
+    expect(result.markdown).toContain("## Module Memory to Maintain");
+    expect(result.markdown).toContain("payment");
+    expect(result.markdown).toContain("provider");
+    expect(result.markdown).toContain("webhook");
+    expect(result.markdown).toContain("secrets");
+    expect(result.markdown).toContain("pricing");
+    expect(result.markdown).toContain("src/app/api/stripe/webhook/route.ts");
+    expect(result.markdown).toContain("Large file");
+    expect(result.markdown).toContain("reflect");
+  });
+
+  it("keeps architecture guidance stable when no project risks are detected", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    const result = await generateDevelopmentBrief(rootDir, "add settings page", {
+      format: "json"
+    });
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const sectionTitles = parsed.sections.map((section) => section.title);
+
+    expect(sectionTitles).toContain("Architecture Boundaries");
+    expect(sectionTitles).toContain("Hardcoding and Configuration Risks");
+    expect(sectionTitles).toContain("Portability Checklist");
+    expect(sectionTitles).toContain("Module Memory to Maintain");
+    expect(result.markdown).toContain("No large-file structure warnings detected.");
+    expect(result.markdown).toContain("Record reusable module decisions after implementation.");
+  });
+
   it("returns stable json output", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
