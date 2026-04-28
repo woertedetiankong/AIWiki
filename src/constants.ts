@@ -16,6 +16,7 @@ export const BRIEF_EVALS_PATH = `${AIWIKI_DIR}/evals/brief-cases.jsonl`;
 export const REFLECT_EVALS_PATH = `${AIWIKI_DIR}/evals/reflect-cases.jsonl`;
 export const PROJECT_MAP_PATH = `${WIKI_DIR}/project-map.md`;
 export const RAW_NOTES_DIR = `${AIWIKI_DIR}/sources/raw-notes`;
+export const MODULE_PACKS_DIR = `${AIWIKI_DIR}/module-packs`;
 
 export const DEFAULT_TOKEN_BUDGET = {
   brief: 8000,
@@ -46,6 +47,7 @@ export const AIWIKI_DIRECTORIES = [
   `${AIWIKI_DIR}/sources/raw-notes`,
   `${AIWIKI_DIR}/sources/git-diffs`,
   `${AIWIKI_DIR}/sources/ai-summaries`,
+  MODULE_PACKS_DIR,
   TASKS_DIR,
   `${WIKI_DIR}/modules`,
   `${WIKI_DIR}/pitfalls`,

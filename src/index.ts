@@ -31,6 +31,7 @@ export {
   GRAPH_JSON_PATH,
   IMPORTANT_DIRECTORY_CANDIDATES,
   LOG_PATH,
+  MODULE_PACKS_DIR,
   PROJECT_MAP_PATH,
   PROJECT_SCAN_EXCLUDED_PATHS,
   PROMPTS_DIR,
@@ -71,6 +72,14 @@ export {
 } from "./lint.js";
 export { appendLogEntry, formatLogEntry } from "./log.js";
 export { writeManagedFile } from "./managed-write.js";
+export {
+  exportModulePack,
+  formatModuleImportPreviewMarkdown,
+  formatModulePackExportMarkdown,
+  generateModuleImportPreview,
+  modulePackSchema,
+  readModulePackFile
+} from "./module-pack.js";
 export {
   formatMarkdown,
   parseMarkdown,
@@ -150,6 +159,15 @@ export type {
   LintResult,
   LintSeverity
 } from "./lint.js";
+export type {
+  ModuleImportPreview,
+  ModulePack,
+  ModulePackExportOptions,
+  ModulePackExportResult,
+  ModulePackImportOptions,
+  ModulePackImportResult,
+  ModulePackPage
+} from "./module-pack.js";
 export type {
   ProjectMap,
   ProjectMapOptions,

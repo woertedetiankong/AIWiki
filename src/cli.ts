@@ -14,6 +14,10 @@ import {
 } from "./output.js";
 import { generateIngestPreview } from "./ingest.js";
 import { lintWiki } from "./lint.js";
+import {
+  exportModulePack,
+  generateModuleImportPreview
+} from "./module-pack.js";
 import { generateProjectMap } from "./project-map.js";
 import { generateRulePromotionPreview } from "./promote-rules.js";
 import { generateReflectPreview } from "./reflect.js";
@@ -209,6 +213,59 @@ architectureCommand
     const result = await generateArchitectureAudit(process.cwd());
     process.stdout.write(format === "json" ? result.json : result.markdown);
   });
+
+const moduleCommand = program
+  .command("module")
+  .description("Export and import portable AIWiki module memory.");
+
+moduleCommand
+  .command("export")
+  .description("Export wiki memory for a module into a portable pack.")
+  .argument("<module>", "Module name to export")
+  .option("--output <path>", "Write the pack to a project-local JSON file")
+  .option("--force", "Overwrite the output pack if it already exists", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      moduleName: string,
+      options: { output?: string; force?: boolean; format?: string }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await exportModulePack(process.cwd(), moduleName, {
+        output: options.output,
+        force: options.force
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+moduleCommand
+  .command("import")
+  .description("Preview importing a portable module pack into this project.")
+  .argument("<pack>", "Path to a module pack JSON file")
+  .option("--target-stack <stack>", "Target project stack or framework")
+  .option("--output-plan <path>", "Write an AIWiki update plan draft to a project-local JSON file")
+  .option("--force", "Overwrite the output plan if it already exists", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      pack: string,
+      options: {
+        targetStack?: string;
+        outputPlan?: string;
+        force?: boolean;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await generateModuleImportPreview(process.cwd(), pack, {
+        targetStack: options.targetStack,
+        outputPlan: options.outputPlan,
+        force: options.force
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
 
 program
   .command("reflect")
