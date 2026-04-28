@@ -8,7 +8,9 @@ import {
   ARCHITECTURE_SOURCE_FILE_EXTENSIONS,
   RISK_FILE_KEYWORDS
 } from "./constants.js";
+import { loadAIWikiConfig } from "./config.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { scanWikiPages } from "./wiki-store.js";
 
 export interface ArchitectureBriefOptions {
   modules?: string[];
@@ -26,6 +28,41 @@ export interface ArchitectureBriefContext {
 interface SourceFileSummary {
   path: string;
   lines: number;
+  content: string;
+}
+
+export type ArchitectureAuditSeverity = "low" | "medium" | "high";
+
+export type ArchitectureAuditIssueCode =
+  | "large_file"
+  | "hardcoded_literal"
+  | "high_risk_file"
+  | "missing_module_memory";
+
+export interface ArchitectureAuditIssue {
+  severity: ArchitectureAuditSeverity;
+  code: ArchitectureAuditIssueCode;
+  title: string;
+  message: string;
+  path?: string;
+}
+
+export interface ArchitectureAudit {
+  projectName: string;
+  summary: {
+    totalIssues: number;
+    high: number;
+    medium: number;
+    low: number;
+    scannedFiles: number;
+  };
+  issues: ArchitectureAuditIssue[];
+}
+
+export interface ArchitectureAuditResult {
+  audit: ArchitectureAudit;
+  markdown: string;
+  json: string;
 }
 
 function normalizePath(filePath: string): string {
@@ -118,7 +155,7 @@ async function summarizeSourceFiles(
 
   for (const file of files) {
     const content = await readFile(resolveProjectPath(rootDir, file), "utf8");
-    summaries.push({ path: file, lines: lineCount(content) });
+    summaries.push({ path: file, lines: lineCount(content), content });
   }
 
   return summaries;
@@ -158,6 +195,191 @@ function riskKeywordFiles(files: SourceFileSummary[], configuredRiskFiles: strin
         return RISK_FILE_KEYWORDS.some((keyword) => value.includes(keyword));
       })
   ]).sort();
+}
+
+function issue(
+  severity: ArchitectureAuditSeverity,
+  code: ArchitectureAuditIssueCode,
+  title: string,
+  message: string,
+  filePath?: string
+): ArchitectureAuditIssue {
+  return { severity, code, title, message, path: filePath };
+}
+
+function largeFileIssues(files: SourceFileSummary[]): ArchitectureAuditIssue[] {
+  return files
+    .filter((file) => file.lines >= ARCHITECTURE_LARGE_FILE_LINE_THRESHOLD)
+    .sort((left, right) => right.lines - left.lines || left.path.localeCompare(right.path))
+    .map((file) =>
+      issue(
+        file.lines >= ARCHITECTURE_LARGE_FILE_LINE_THRESHOLD * 2 ? "high" : "medium",
+        "large_file",
+        "Large file",
+        `${file.path} has ${file.lines} lines. Split new responsibilities into focused module, service, adapter, and test files before the file becomes harder to migrate.`,
+        file.path
+      )
+    );
+}
+
+function hardcodedLiteralIssues(files: SourceFileSummary[]): ArchitectureAuditIssue[] {
+  const issues: ArchitectureAuditIssue[] = [];
+  const secretPattern = /['"`](?:sk_(?:test|live)_[^'"`]+|pk_(?:test|live)_[^'"`]+|[^'"`]*(?:secret|api[_-]?key|token)[^'"`]*)['"`]/giu;
+  const urlPattern = /['"`]https?:\/\/[^'"`]+['"`]/giu;
+
+  for (const file of files) {
+    if (secretPattern.test(file.content)) {
+      issues.push(
+        issue(
+          "high",
+          "hardcoded_literal",
+          "Potential secret-like literal",
+          `${file.path} contains a secret-like literal. Move secrets, tokens, and provider keys behind environment/config boundaries.`,
+          file.path
+        )
+      );
+    }
+    secretPattern.lastIndex = 0;
+
+    if (urlPattern.test(file.content)) {
+      issues.push(
+        issue(
+          "medium",
+          "hardcoded_literal",
+          "Potential hardcoded URL",
+          `${file.path} contains a URL literal. Confirm whether URLs, webhook endpoints, and provider hosts should be configurable for reuse in another project.`,
+          file.path
+        )
+      );
+    }
+    urlPattern.lastIndex = 0;
+  }
+
+  return issues;
+}
+
+function highRiskFileIssues(
+  files: SourceFileSummary[],
+  configuredRiskFiles: string[]
+): ArchitectureAuditIssue[] {
+  return riskKeywordFiles(files, configuredRiskFiles).map((filePath) =>
+    issue(
+      "medium",
+      "high_risk_file",
+      "High-risk file",
+      `${filePath} matches configured or keyword-based high-risk paths. Review module boundaries, tests, and configuration before editing.`,
+      filePath
+    )
+  );
+}
+
+async function missingModuleMemoryIssues(rootDir: string): Promise<ArchitectureAuditIssue[]> {
+  const config = await loadAIWikiConfig(rootDir);
+  const pages = await scanWikiPages(rootDir);
+  const knownModules = new Set(
+    pages
+      .filter((page) => page.frontmatter.type === "module")
+      .flatMap((page) => [
+        ...(page.frontmatter.modules ?? []),
+        page.frontmatter.title
+      ])
+      .filter((value): value is string => Boolean(value))
+      .map((value) => value.toLowerCase())
+  );
+
+  return config.highRiskModules
+    .filter((moduleName) => !knownModules.has(moduleName.toLowerCase()))
+    .map((moduleName) =>
+      issue(
+        "medium",
+        "missing_module_memory",
+        "Missing module memory",
+        `${moduleName} is configured as high-risk but has no module page. Add module memory so future brief, guard, reflect, and migration workflows have a stable boundary to reuse.`
+      )
+    );
+}
+
+function summarizeIssues(issues: ArchitectureAuditIssue[], scannedFiles: number): ArchitectureAudit["summary"] {
+  return {
+    totalIssues: issues.length,
+    high: issues.filter((item) => item.severity === "high").length,
+    medium: issues.filter((item) => item.severity === "medium").length,
+    low: issues.filter((item) => item.severity === "low").length,
+    scannedFiles
+  };
+}
+
+function formatIssueList(
+  issues: ArchitectureAuditIssue[],
+  fallback: string
+): string {
+  if (issues.length === 0) {
+    return `- ${fallback}`;
+  }
+
+  return issues
+    .map((item) => {
+      const target = item.path ? `${item.path}: ` : "";
+      return `- [${item.severity}] ${target}${item.message}`;
+    })
+    .join("\n");
+}
+
+export function formatArchitectureAuditMarkdown(audit: ArchitectureAudit): string {
+  const byCode = (code: ArchitectureAuditIssueCode): ArchitectureAuditIssue[] =>
+    audit.issues.filter((item) => item.code === code);
+
+  return `# Architecture Audit: ${audit.projectName}
+
+## Summary
+- Files scanned: ${audit.summary.scannedFiles}
+- Total issues: ${audit.summary.totalIssues}
+- High: ${audit.summary.high}
+- Medium: ${audit.summary.medium}
+- Low: ${audit.summary.low}
+
+## Large Files
+${formatIssueList(byCode("large_file"), "No large files detected.")}
+
+## Hardcoding Risks
+${formatIssueList(byCode("hardcoded_literal"), "No hardcoding risks detected.")}
+
+## High-Risk Files
+${formatIssueList(byCode("high_risk_file"), "No high-risk files detected.")}
+
+## Missing Module Memory
+${formatIssueList(byCode("missing_module_memory"), "No missing module memory detected.")}
+`;
+}
+
+function architectureAuditToJson(audit: ArchitectureAudit): string {
+  return `${JSON.stringify(audit, null, 2)}\n`;
+}
+
+export async function generateArchitectureAudit(
+  rootDir: string
+): Promise<ArchitectureAuditResult> {
+  const config = await loadAIWikiConfig(rootDir);
+  const ignorePatterns = unique([
+    ...ARCHITECTURE_SCAN_EXCLUDED_PATHS,
+    ...config.ignore
+  ]);
+  const sourceFiles = await summarizeSourceFiles(rootDir, ignorePatterns);
+  const issues = [
+    ...largeFileIssues(sourceFiles),
+    ...hardcodedLiteralIssues(sourceFiles),
+    ...highRiskFileIssues(sourceFiles, config.riskFiles),
+    ...(await missingModuleMemoryIssues(rootDir))
+  ];
+  const audit: ArchitectureAudit = {
+    projectName: config.projectName,
+    summary: summarizeIssues(issues, sourceFiles.length),
+    issues
+  };
+  const markdown = formatArchitectureAuditMarkdown(audit);
+  const json = architectureAuditToJson(audit);
+
+  return { audit, markdown, json };
 }
 
 export async function generateArchitectureBriefContext(

@@ -1,4 +1,6 @@
 export {
+  formatArchitectureAuditMarkdown,
+  generateArchitectureAudit,
   generateArchitectureBriefContext
 } from "./architecture.js";
 export {
@@ -106,6 +108,11 @@ export {
   TASK_FILES
 } from "./task.js";
 export type {
+  ArchitectureAudit,
+  ArchitectureAuditIssue,
+  ArchitectureAuditIssueCode,
+  ArchitectureAuditResult,
+  ArchitectureAuditSeverity,
   ArchitectureBriefContext,
   ArchitectureBriefOptions
 } from "./architecture.js";

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { applyWikiUpdatePlan, readWikiUpdatePlanFile } from "./apply.js";
+import { generateArchitectureAudit } from "./architecture.js";
 import { generateDevelopmentBrief } from "./brief.js";
 import { AIWIKI_VERSION } from "./constants.js";
 import { buildWikiGraph } from "./graph.js";
@@ -194,6 +195,20 @@ program
       process.stdout.write(format === "json" ? result.json : result.markdown);
     }
   );
+
+const architectureCommand = program
+  .command("architecture")
+  .description("Inspect architecture health and portability risks.");
+
+architectureCommand
+  .command("audit")
+  .description("Report architecture, hardcoding, and module memory risks.")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (options: { format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await generateArchitectureAudit(process.cwd());
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
 
 program
   .command("reflect")
