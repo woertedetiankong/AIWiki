@@ -252,6 +252,11 @@ Implementations MUST merge partial config files with defaults.
 
 Invalid config MUST produce a clear error.
 
+Project file scans MUST combine built-in generated/dependency ignore rules, root `.gitignore`
+rules, and `AIWikiConfig.ignore` rules in that order. Ignore rules MAY use `!path` to re-include
+files ignored by earlier rules. Commands MUST treat these rules as scan guidance only; they MUST
+NOT delete or rewrite ignored files.
+
 ### 5.2 Wiki Page
 
 A wiki page is a Markdown file under `.aiwiki/wiki/` with YAML frontmatter.
@@ -452,6 +457,10 @@ Behavior:
 - MUST read `.aiwiki/index.md` when available.
 - MUST search wiki memory for task-relevant pages.
 - MUST include selected docs.
+- MUST include advisory staleness warnings when selected wiki memory references missing project
+  files or files changed after the page's `last_updated` value.
+- Markdown output MUST show at most three staleness warnings and point to JSON for full details
+  when more warnings exist.
 - `--with-graphify` MUST read project-local `graphify-out/` structural context when available.
 - `--with-graphify` MUST degrade gracefully when Graphify output is missing or malformed.
 - `--architecture-guard` MUST add an explicit Architecture Guard section without removing the
@@ -498,6 +507,10 @@ Behavior:
 - MUST normalize target paths to project-local POSIX-style paths.
 - MUST find exact wiki pages that reference the file.
 - MUST also search by meaningful path tokens.
+- MUST include advisory staleness warnings when matched wiki memory references missing project
+  files or files changed after the page's `last_updated` value.
+- Markdown output MUST show at most three staleness warnings and point to JSON for full details
+  when more warnings exist.
 - `--with-graphify` MUST read project-local `graphify-out/` structural context when available.
 - `--with-graphify` MUST degrade gracefully when Graphify output is missing or malformed.
 - `--architecture-guard` MUST add explicit architecture-focused checks for the target file.
@@ -527,6 +540,7 @@ aiwiki map [--write] [--force] [--format markdown|json]
 Behavior:
 
 - MUST scan project files outside ignored directories.
+- MUST respect root `.gitignore` and configured ignore rules.
 - MUST detect stack signals from `package.json`, `tsconfig.json`, and dependencies.
 - MUST detect important directories.
 - MUST detect high-risk files from config, wiki pages, and risk keywords.
@@ -639,6 +653,9 @@ Behavior:
 - MUST detect duplicate pitfalls.
 - MUST detect index gaps.
 - MUST detect missing high-risk module pages.
+- MUST warn when wiki frontmatter `files` entries point to missing project files.
+- MUST warn when referenced project files changed after a wiki page's `last_updated` value.
+- Staleness warnings MUST be advisory and MUST NOT set a non-zero process exit code by themselves.
 - SHOULD detect orphan pages.
 - SHOULD detect rule conflicts and stale decisions as the implementation matures.
 
@@ -932,7 +949,7 @@ aiwiki architecture audit [--format markdown|json]
 Requirements:
 
 - MUST scan project source files outside ignored directories.
-- MUST respect configured ignore patterns.
+- MUST respect root `.gitignore` and configured ignore rules.
 - SHOULD flag high-risk domains such as payment, auth, security, webhook, migration, schema, and
   billing.
 - SHOULD flag large files and hardcoding risks such as secret-like literals and URL literals.
@@ -982,6 +999,8 @@ Requirements:
   requested module.
 - `module brief` MUST generate a read-only task brief for adapting module experience to the current
   project.
+- `module brief` Markdown MUST use compact Codex-facing sections: Must Read, Do Not, Rules,
+  Pitfalls, Suggested Tests, and Other Context.
 - `module brief` MUST instruct agents to port module contracts, rules, pitfalls, configuration
   needs, and tests rather than copying source code directly.
 - `module brief` MUST NOT write update plans, wiki pages, rules, or confirmed memory.

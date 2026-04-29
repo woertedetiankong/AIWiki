@@ -2,6 +2,12 @@
 
 This project is a local-first AI coding memory tool. Code should be written like product infrastructure: boring in the best way, easy to extend, explicit about data boundaries, and resistant to accidental user data loss.
 
+
+
+## Encoding Requirement
+Save all text files using UTF-8 encoding (prefer UTF-8 without BOM) to prevent Chinese character garbling in Windows editors and IDEs.
+
+Note: When reading UTF-8 files in PowerShell, use Get-Content -Encoding UTF8; the default codepage may garble Chinese text.
 ## Product Principles
 
 - Build the actual local CLI workflow first. Do not add Web UI, cloud sync, MCP, GEPA, or deep-context systems before the core Markdown workflow is solid.
@@ -12,7 +18,7 @@ This project is a local-first AI coding memory tool. Code should be written like
 
 ## Architecture Rules
 
-- Keep product conventions centralized. Directory names, default files, default token budgets, ignore lists, and version constants belong in `src/constants.ts` or a similarly focused module.
+- Keep product conventions centralized. Directory names, default files, default token budgets, default ignore lists, and version constants belong in `src/constants.ts` or a similarly focused module; ignore matching and `.gitignore` integration belong in `src/ignore.ts`.
 - Keep templates out of orchestration code. Prompt text, default Markdown pages, and agent instructions belong in template modules or template files, not inside command handlers.
 - Keep command handlers thin. CLI files should parse input, call domain functions, and format output. They should not contain business logic.
 - Prefer small reusable services over command-specific logic. Search, Markdown parsing, wiki scanning, log writing, config loading, and managed writes should be shared by commands.

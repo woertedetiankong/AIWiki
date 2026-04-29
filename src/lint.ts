@@ -4,6 +4,7 @@ import { INDEX_PATH, WIKI_DIR } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
 import { parseMarkdown } from "./markdown.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { collectWikiStalenessWarnings } from "./staleness.js";
 import type { WikiPage, WikiPageFrontmatter } from "./types.js";
 import { wikiPageFrontmatterSchema } from "./wiki-frontmatter.js";
 
@@ -346,6 +347,11 @@ export async function lintWiki(rootDir: string): Promise<LintResult> {
   issues.push(...orphanIssues(pages));
   issues.push(...duplicatePitfallIssues(pages));
   issues.push(...missingHighRiskModuleIssues(config.highRiskModules, pages));
+  issues.push(
+    ...(await collectWikiStalenessWarnings(rootDir, pages)).map((warning) =>
+      issue("warning", warning.code, warning.message, warning.page)
+    )
+  );
 
   const report: LintReport = {
     issues: issues.sort((a, b) => {

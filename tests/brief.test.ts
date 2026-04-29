@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -73,6 +73,28 @@ describe("generateDevelopmentBrief", () => {
     expect(result.markdown).toContain("Cold-start mode");
     expect(result.markdown).toContain("aiwiki init --project-name <name>");
     expect(result.markdown).toContain("src/billing-webhook.ts");
+  });
+
+  it("respects project .gitignore during cold-start discovery", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await mkdir(path.join(rootDir, "ignored"), { recursive: true });
+    await writeFile(path.join(rootDir, ".gitignore"), "ignored/\n", "utf8");
+    await writeFile(
+      path.join(rootDir, "src", "billing-webhook.ts"),
+      "export function billingWebhook() { return 'stripe webhook'; }\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "ignored", "stripe-webhook.ts"),
+      "export function ignoredWebhook() { return 'stripe webhook billing'; }\n",
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(rootDir, "stripe webhook");
+
+    expect(result.markdown).toContain("src/billing-webhook.ts");
+    expect(result.markdown).not.toContain("ignored/stripe-webhook.ts");
   });
 
   it("generates a no-LLM brief with relevant memory sections", async () => {
@@ -239,6 +261,192 @@ describe("generateDevelopmentBrief", () => {
     expect(result.markdown).toContain("more item(s) omitted from markdown");
     expect(result.markdown).toContain("--format json");
     expect(discovered?.items.length).toBeGreaterThan(8);
+  });
+
+  it("scopes architecture warnings to task-relevant subprojects in mixed repositories", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "mixed-pms" });
+    await mkdir(path.join(rootDir, "pms_web", "PMS", "src", "pages", "otherModel"), {
+      recursive: true
+    });
+    await mkdir(path.join(rootDir, "pms_web", "PMS", "src", "components", "base"), {
+      recursive: true
+    });
+    await mkdir(path.join(rootDir, "pms-app", "pages", "maintain"), {
+      recursive: true
+    });
+    await writeFile(
+      path.join(rootDir, "pms_web", "PMS", "src", "pages", "otherModel", "mesConnectConfig.vue"),
+      "<template><div>mes connection</div></template>\n<script>export default { name: 'MesConnectConfig' };</script>\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "pms_web", "PMS", "src", "components", "base", "SubTable.vue"),
+      Array.from({ length: 900 }, (_, index) => `<div>${index}</div>`).join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "pms-app", "pages", "maintain", "maintMain.vue"),
+      Array.from({ length: 900 }, (_, index) => `<view>${index}</view>`).join("\n"),
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "update PMS web MES connection config page behavior"
+    );
+
+    expect(result.markdown).toContain("pms_web/PMS/src/pages/otherModel/mesConnectConfig.vue");
+    expect(result.markdown).not.toContain("pms-app/pages/maintain/maintMain.vue");
+    expect(result.markdown).not.toContain("pms_web/PMS/src/components/base/SubTable.vue");
+  });
+
+  it("treats project and package name tokens as low-signal in cold-start discovery", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "pydantic-deep" });
+    await writeFile(
+      path.join(rootDir, "pyproject.toml"),
+      '[project]\nname = "pydantic-deep"\n',
+      "utf8"
+    );
+    await mkdir(path.join(rootDir, "pydantic_deep", "toolsets"), { recursive: true });
+    await mkdir(path.join(rootDir, "pydantic_deep", "toolsets", "plan"), { recursive: true });
+    await mkdir(path.join(rootDir, "pydantic_deep", "toolsets", "skills"), { recursive: true });
+    await mkdir(path.join(rootDir, "cli"), { recursive: true });
+    await mkdir(path.join(rootDir, "apps", "deepresearch"), { recursive: true });
+    await mkdir(path.join(rootDir, "examples"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "pydantic_deep", "toolsets", "context.py"),
+      "class ContextToolset:\n    '''context toolset memory behavior'''\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "pydantic_deep", "toolsets", "memory.py"),
+      "class MemoryToolset:\n    '''agent memory toolset behavior'''\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "apps", "deepresearch", "pydantic_deep_agent.py"),
+      "class DeepResearchAgent:\n    '''agent context only'''\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "examples", "subagents.py"),
+      "class ExampleSubagents:\n    '''agent context only'''\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "pydantic_deep", "toolsets", "skills", "toolset.py"),
+      "class SkillsToolset:\n    '''agent context toolset'''\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "pydantic_deep", "toolsets", "plan", "toolset.py"),
+      "class PlanToolset:\n    '''agent context toolset'''\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "cli", "agent.py"),
+      "class CliAgent:\n    '''agent context memory toolset'''\n",
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "modify pydantic deep agent context toolset and memory behavior"
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const discovered = parsed.sections.find(
+      (section) => section.title === "Discovered Entry Files"
+    )?.items.join("\n") ?? "";
+
+    expect(discovered.indexOf("pydantic_deep/toolsets/context.py")).toBeLessThan(
+      discovered.indexOf("cli/agent.py")
+    );
+    expect(discovered.indexOf("pydantic_deep/toolsets/memory.py")).toBeLessThan(
+      discovered.indexOf("pydantic_deep/toolsets/skills/toolset.py")
+    );
+    expect(discovered.indexOf("pydantic_deep/toolsets/context.py")).toBeLessThan(
+      discovered.indexOf("pydantic_deep/toolsets/plan/toolset.py")
+    );
+    expect(discovered).not.toContain("apps/deepresearch/pydantic_deep_agent.py");
+    expect(discovered).not.toContain("examples/subagents.py");
+  });
+
+  it("prefers implementation files over test files for non-test cold-start tasks", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "cli"), { recursive: true });
+    await mkdir(path.join(rootDir, "tests"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "cli", "interactive.py"),
+      "def render_picker_display():\n    return 'interactive picker display'\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "tests", "test_cli_interactive.py"),
+      "def test_render_picker_display():\n    assert 'interactive picker display'\n",
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "fix interactive CLI picker display behavior",
+      { format: "json" }
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const discovered = parsed.sections.find(
+      (section) => section.title === "Discovered Entry Files"
+    )?.items.join("\n") ?? "";
+
+    expect(discovered.indexOf("cli/interactive.py")).toBeLessThan(
+      discovered.indexOf("tests/test_cli_interactive.py")
+    );
+  });
+
+  it("surfaces compact staleness warnings for selected memory", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), { recursive: true });
+
+    for (let index = 0; index < 4; index += 1) {
+      const filePath = path.join(rootDir, "src", `checkout-${index}.ts`);
+      await writeFile(filePath, `export const checkout${index} = true;\n`, "utf8");
+      await utimes(
+        filePath,
+        new Date("2026-04-01T00:00:00Z"),
+        new Date("2026-04-01T00:00:00Z")
+      );
+      await writeMarkdownFile(
+        path.join(rootDir, ".aiwiki", "wiki", "modules", `checkout-${index}.md`),
+        {
+          type: "module",
+          title: `Checkout stale ${index}`,
+          modules: ["checkout"],
+          files: [`src/checkout-${index}.ts`],
+          last_updated: "2026-03-01"
+        },
+        `# Checkout stale ${index}\n\ncheckout memory.\n`
+      );
+    }
+
+    const result = await generateDevelopmentBrief(rootDir, "checkout", {
+      format: "json"
+    });
+    const parsed = JSON.parse(result.json) as {
+      stalenessWarnings: Array<{ code: string; file: string }>;
+    };
+
+    expect(result.markdown).toContain("## Staleness Warnings");
+    expect(result.markdown).toContain("stale_referenced_file");
+    expect(result.markdown).toContain("1 more staleness warning(s) omitted from markdown");
+    expect(result.markdown).toContain("--format json");
+    expect(parsed.stalenessWarnings).toHaveLength(4);
+    expect(parsed.stalenessWarnings[0]?.code).toBe("stale_referenced_file");
   });
 
   it("discovers task-matching markdown docs for document cleanup tasks", async () => {

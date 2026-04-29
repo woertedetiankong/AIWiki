@@ -57,6 +57,12 @@ async function setupProject(rootDir: string): Promise<void> {
   await writeProjectFile(rootDir, ".idea/workspace.xml", "generated\n");
   await writeProjectFile(rootDir, ".wrangler/tmp/ProxyServerWorker.js", "generated\n");
   await writeProjectFile(rootDir, ".history/old.ts", "generated\n");
+  await writeProjectFile(rootDir, ".venv/Lib/site-packages/vendor.py", "generated\n");
+  await writeProjectFile(rootDir, ".pytest_cache/state", "generated\n");
+  await writeProjectFile(rootDir, ".ruff_cache/cache", "generated\n");
+  await writeProjectFile(rootDir, "__pycache__/module.pyc", "generated\n");
+  await writeProjectFile(rootDir, ".pydantic-deep/tasks/state.json", "generated\n");
+  await writeProjectFile(rootDir, "htmlcov/index.html", "generated\n");
   await writeProjectFile(rootDir, "archive.zip", "generated\n");
   await writeProjectFile(rootDir, "tsconfig.tsbuildinfo", "generated\n");
 }
@@ -136,6 +142,8 @@ describe("generateProjectMap", () => {
     expect(result.projectMap.generatedFiles).not.toContain("archive.zip");
     expect(result.projectMap.highRiskFiles.join("\n")).not.toContain("target/classes");
     expect(result.projectMap.highRiskFiles.join("\n")).not.toContain("chrome-debug-profile");
+    expect(result.projectMap.highRiskFiles.join("\n")).not.toContain(".venv");
+    expect(result.projectMap.highRiskFiles.join("\n")).not.toContain(".pydantic-deep");
     expect(result.markdown).toContain("# Project Map: demo");
   });
 
@@ -154,6 +162,22 @@ describe("generateProjectMap", () => {
     expect(result.projectMap.highRiskFiles).toContain("src/cli.ts");
     expect(result.projectMap.highRiskFiles).toContain("src/app/api/auth/route.ts");
     expect(result.projectMap.missingModulePages).toContain("auth");
+  });
+
+  it("uses .gitignore and lets config ignore rules override later", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, ".gitignore", "*.ts\n");
+    await writeProjectFile(rootDir, "src/allowed-auth.ts", "export {};\n");
+    await writeProjectFile(rootDir, "src/blocked-auth.ts", "export {};\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await updateConfig(rootDir, {
+      ignore: ["!src/allowed-auth.ts"]
+    });
+
+    const result = await generateProjectMap(rootDir);
+
+    expect(result.projectMap.highRiskFiles).toContain("src/allowed-auth.ts");
+    expect(result.projectMap.highRiskFiles).not.toContain("src/blocked-auth.ts");
   });
 
   it("formats markdown and json output", async () => {

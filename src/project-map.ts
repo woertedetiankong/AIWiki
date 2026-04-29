@@ -8,6 +8,12 @@ import {
   RISK_FILE_KEYWORDS
 } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
+import {
+  collectProjectIgnoreRules,
+  createIgnoreRules,
+  shouldIgnorePath
+} from "./ignore.js";
+import type { IgnoreRule } from "./ignore.js";
 import { appendLogEntry } from "./log.js";
 import { formatMarkdown } from "./markdown.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
@@ -57,36 +63,9 @@ function pathSegments(filePath: string): string[] {
   return normalizePath(filePath).split("/");
 }
 
-function matchesPattern(relativePath: string, pattern: string): boolean {
-  const normalizedPattern = normalizePath(pattern).replace(/\/$/u, "");
-  const normalizedPath = normalizePath(relativePath);
-  const basename = path.posix.basename(normalizedPath);
-
-  if (normalizedPattern.endsWith("*")) {
-    const prefix = normalizedPattern.slice(0, -1);
-    return normalizedPath.startsWith(prefix) || basename.startsWith(prefix);
-  }
-
-  if (normalizedPattern.startsWith("*")) {
-    const suffix = normalizedPattern.slice(1);
-    return normalizedPath.endsWith(suffix) || basename.endsWith(suffix);
-  }
-
-  return (
-    normalizedPath === normalizedPattern ||
-    normalizedPath.startsWith(`${normalizedPattern}/`) ||
-    normalizedPath.includes(`/${normalizedPattern}/`) ||
-    pathSegments(normalizedPath).includes(normalizedPattern)
-  );
-}
-
-function shouldIgnore(relativePath: string, ignorePatterns: readonly string[]): boolean {
-  return ignorePatterns.some((pattern) => matchesPattern(relativePath, pattern));
-}
-
 async function walkProjectFiles(
   rootDir: string,
-  ignorePatterns: readonly string[],
+  ignoreRules: readonly IgnoreRule[],
   currentDir = rootDir
 ): Promise<string[]> {
   let entries;
@@ -105,12 +84,12 @@ async function walkProjectFiles(
     const fullPath = path.join(currentDir, entry.name);
     const relativePath = normalizePath(path.relative(rootDir, fullPath));
 
-    if (shouldIgnore(relativePath, ignorePatterns)) {
+    if (shouldIgnorePath(relativePath, ignoreRules)) {
       continue;
     }
 
     if (entry.isDirectory()) {
-      files.push(...(await walkProjectFiles(rootDir, ignorePatterns, fullPath)));
+      files.push(...(await walkProjectFiles(rootDir, ignoreRules, fullPath)));
     } else if (entry.isFile()) {
       files.push(relativePath);
     }
@@ -194,9 +173,10 @@ function detectImportantDirectories(files: string[]): string[] {
 }
 
 function detectGeneratedFiles(files: string[]): string[] {
+  const generatedRules = createIgnoreRules(GENERATED_FILE_CANDIDATES);
   return files
     .filter((file) => {
-      return GENERATED_FILE_CANDIDATES.some((candidate) => matchesPattern(file, candidate));
+      return shouldIgnorePath(file, generatedRules);
     })
     .sort();
 }
@@ -361,11 +341,12 @@ export async function generateProjectMap(
   options: ProjectMapOptions = {}
 ): Promise<ProjectMapResult> {
   const config = await loadAIWikiConfig(rootDir);
-  const ignorePatterns = unique([
-    ...PROJECT_SCAN_EXCLUDED_PATHS,
-    ...config.ignore
-  ]);
-  const files = await walkProjectFiles(rootDir, ignorePatterns);
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    PROJECT_SCAN_EXCLUDED_PATHS,
+    config.ignore
+  );
+  const files = await walkProjectFiles(rootDir, ignoreRules);
   const packageJson = await readJsonFile<PackageJson>(rootDir, "package.json");
   const pages = await scanWikiPages(rootDir);
   const modules = moduleNames(pages);

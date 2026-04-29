@@ -9,6 +9,11 @@ import {
   RISK_FILE_KEYWORDS
 } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
+import {
+  collectProjectIgnoreRules,
+  shouldIgnorePath
+} from "./ignore.js";
+import type { IgnoreRule } from "./ignore.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { scanWikiPages } from "./wiki-store.js";
 
@@ -16,6 +21,7 @@ export interface ArchitectureBriefOptions {
   modules?: string[];
   highRiskFiles?: string[];
   ignorePatterns?: string[];
+  focusFiles?: string[];
 }
 
 export interface ArchitectureBriefContext {
@@ -69,39 +75,6 @@ function normalizePath(filePath: string): string {
   return toPosixPath(filePath).replace(/^\.\//u, "");
 }
 
-function pathSegments(filePath: string): string[] {
-  return normalizePath(filePath).split("/");
-}
-
-function matchesPattern(relativePath: string, pattern: string): boolean {
-  const normalizedPattern = normalizePath(pattern).replace(/\/$/u, "");
-  const normalizedPath = normalizePath(relativePath);
-  const basename = path.posix.basename(normalizedPath);
-
-  if (normalizedPattern.endsWith("*")) {
-    const prefix = normalizedPattern.slice(0, -1);
-    return normalizedPath.startsWith(prefix) || basename.startsWith(prefix);
-  }
-
-  if (normalizedPattern.startsWith("*")) {
-    const suffix = normalizedPattern.slice(1);
-    return normalizedPath.endsWith(suffix) || basename.endsWith(suffix);
-  }
-
-  return (
-    normalizedPath === normalizedPattern ||
-    normalizedPath.startsWith(`${normalizedPattern}/`) ||
-    normalizedPath.includes(`/${normalizedPattern}/`) ||
-    pathSegments(normalizedPath).includes(normalizedPattern)
-  );
-}
-
-function shouldIgnore(relativePath: string, ignorePatterns: readonly string[]): boolean {
-  return ignorePatterns.some((pattern) =>
-    matchesPattern(relativePath, pattern)
-  );
-}
-
 function isSourceFile(relativePath: string): boolean {
   const extension = path.posix.extname(normalizePath(relativePath));
   return ARCHITECTURE_SOURCE_FILE_EXTENSIONS.includes(
@@ -111,7 +84,7 @@ function isSourceFile(relativePath: string): boolean {
 
 async function walkSourceFiles(
   rootDir: string,
-  ignorePatterns: readonly string[],
+  ignoreRules: readonly IgnoreRule[],
   currentDir = rootDir
 ): Promise<string[]> {
   let entries;
@@ -130,12 +103,12 @@ async function walkSourceFiles(
     const fullPath = path.join(currentDir, entry.name);
     const relativePath = normalizePath(path.relative(rootDir, fullPath));
 
-    if (shouldIgnore(relativePath, ignorePatterns)) {
+    if (shouldIgnorePath(relativePath, ignoreRules)) {
       continue;
     }
 
     if (entry.isDirectory()) {
-      files.push(...(await walkSourceFiles(rootDir, ignorePatterns, fullPath)));
+      files.push(...(await walkSourceFiles(rootDir, ignoreRules, fullPath)));
     } else if (entry.isFile() && isSourceFile(relativePath)) {
       files.push(relativePath);
     }
@@ -154,9 +127,9 @@ function lineCount(content: string): number {
 
 async function summarizeSourceFiles(
   rootDir: string,
-  ignorePatterns: readonly string[]
+  ignoreRules: readonly IgnoreRule[]
 ): Promise<SourceFileSummary[]> {
-  const files = await walkSourceFiles(rootDir, ignorePatterns);
+  const files = await walkSourceFiles(rootDir, ignoreRules);
   const summaries: SourceFileSummary[] = [];
 
   for (const file of files) {
@@ -189,6 +162,28 @@ function largeFileWarnings(files: SourceFileSummary[]): string[] {
       (file) =>
         `Large file warning: ${file.path} has ${file.lines} lines; keep new responsibilities split into focused module, service, adapter, and test files.`
     );
+}
+
+function stripDiscoverySuffix(value: string): string {
+  return normalizePath(value.replace(/\s+\(matched:.*\)$/u, ""));
+}
+
+function focusSourceFiles(
+  files: SourceFileSummary[],
+  focusFiles: readonly string[]
+): SourceFileSummary[] {
+  const normalizedFocusFiles = unique(
+    focusFiles
+      .map(stripDiscoverySuffix)
+      .filter((filePath) => filePath.length > 0)
+  );
+  const focusSet = new Set(normalizedFocusFiles);
+
+  if (focusSet.size === 0) {
+    return files;
+  }
+
+  return files.filter((file) => focusSet.has(file.path));
 }
 
 function riskKeywordFiles(files: SourceFileSummary[], configuredRiskFiles: string[]): string[] {
@@ -366,11 +361,12 @@ export async function generateArchitectureAudit(
   rootDir: string
 ): Promise<ArchitectureAuditResult> {
   const config = await loadAIWikiConfig(rootDir);
-  const ignorePatterns = unique([
-    ...ARCHITECTURE_SCAN_EXCLUDED_PATHS,
-    ...config.ignore
-  ]);
-  const sourceFiles = await summarizeSourceFiles(rootDir, ignorePatterns);
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    ARCHITECTURE_SCAN_EXCLUDED_PATHS,
+    config.ignore
+  );
+  const sourceFiles = await summarizeSourceFiles(rootDir, ignoreRules);
   const issues = [
     ...largeFileIssues(sourceFiles),
     ...hardcodedLiteralIssues(sourceFiles),
@@ -394,13 +390,15 @@ export async function generateArchitectureBriefContext(
   options: ArchitectureBriefOptions = {}
 ): Promise<ArchitectureBriefContext> {
   const modules = unique(options.modules ?? []);
-  const ignorePatterns = unique([
-    ...ARCHITECTURE_SCAN_EXCLUDED_PATHS,
-    ...(options.ignorePatterns ?? [])
-  ]);
-  const sourceFiles = await summarizeSourceFiles(rootDir, ignorePatterns);
-  const largeFiles = largeFileWarnings(sourceFiles);
-  const riskFiles = riskKeywordFiles(sourceFiles, options.highRiskFiles ?? []);
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    ARCHITECTURE_SCAN_EXCLUDED_PATHS,
+    options.ignorePatterns ?? []
+  );
+  const sourceFiles = await summarizeSourceFiles(rootDir, ignoreRules);
+  const focusedSourceFiles = focusSourceFiles(sourceFiles, options.focusFiles ?? []);
+  const largeFiles = largeFileWarnings(focusedSourceFiles);
+  const riskFiles = riskKeywordFiles(focusedSourceFiles, options.highRiskFiles ?? []);
   const relevantRiskFiles = riskFiles.slice(0, 6);
   const moduleName = moduleLabel(modules);
   const taskLooksProviderBacked = taskMentionsAny(task, [

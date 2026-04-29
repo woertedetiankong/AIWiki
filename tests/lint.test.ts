@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -82,5 +82,79 @@ describe("lintWiki", () => {
     };
 
     expect(parsed.summary.pagesChecked).toBe(0);
+  });
+
+  it("warns when wiki file references are missing or stale", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "fresh.ts"), "export const fresh = true;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "stale.ts"), "export const stale = true;\n", "utf8");
+    await utimes(
+      path.join(rootDir, "src", "fresh.ts"),
+      new Date("2026-01-01T00:00:00Z"),
+      new Date("2026-01-01T00:00:00Z")
+    );
+    await utimes(
+      path.join(rootDir, "src", "stale.ts"),
+      new Date("2026-04-01T00:00:00Z"),
+      new Date("2026-04-01T00:00:00Z")
+    );
+
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "fresh.md"),
+      {
+        type: "module",
+        title: "Fresh",
+        files: ["src/fresh.ts"],
+        last_updated: "2026-04-10"
+      },
+      "# Fresh\n"
+    );
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "stale.md"),
+      {
+        type: "module",
+        title: "Stale",
+        files: ["src/stale.ts"],
+        last_updated: "2026-03-01"
+      },
+      "# Stale\n"
+    );
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "missing.md"),
+      {
+        type: "module",
+        title: "Missing",
+        files: ["src/missing.ts", "../outside.ts"],
+        last_updated: "2026-04-10"
+      },
+      "# Missing\n"
+    );
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "undated.md"),
+      {
+        type: "module",
+        title: "Undated",
+        files: ["src/stale.ts"]
+      },
+      "# Undated\n"
+    );
+
+    const result = await lintWiki(rootDir);
+    const stale = result.report.issues.filter(
+      (issue) => issue.code === "stale_referenced_file"
+    );
+    const missing = result.report.issues.filter(
+      (issue) => issue.code === "missing_referenced_file"
+    );
+
+    expect(stale).toHaveLength(1);
+    expect(stale[0]?.message).toContain("src/stale.ts");
+    expect(missing).toHaveLength(2);
+    expect(missing.map((issue) => issue.message).join("\n")).toContain("src/missing.ts");
+    expect(missing.map((issue) => issue.message).join("\n")).toContain("../outside.ts");
+    expect(result.markdown).toContain("stale_referenced_file");
   });
 });

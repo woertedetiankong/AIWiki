@@ -460,7 +460,15 @@ function formatModuleMemoryBriefMarkdown(brief: ModuleMemoryBrief): string {
       ]
     },
     {
-      title: "Porting Rules",
+      title: "Do Not",
+      items: [
+        "Do not copy source code directly from the source module.",
+        "Do not write update plans, wiki pages, rules, or confirmed memory from this brief.",
+        "Do not treat imported module experience as active target-project rules until reviewed."
+      ]
+    },
+    {
+      title: "Rules",
       items: [...moduleBriefSectionItems(brief, "Porting Mode"), ...rules]
     },
     {
@@ -468,15 +476,15 @@ function formatModuleMemoryBriefMarkdown(brief: ModuleMemoryBrief): string {
       items: pitfalls
     },
     {
-      title: "Configuration and Boundary Notes",
-      items: [...decisions, ...patterns, ...guidance]
-    },
-    {
       title: "Suggested Tests",
       items: conciseItems(
         tests,
         "Add focused tests for the adapted module behavior, configuration boundaries, and known pitfalls."
       )
+    },
+    {
+      title: "Other Context",
+      items: [...decisions, ...patterns, ...guidance]
     }
   ]
     .map((section) => `## ${section.title}\n${formatList(section.items, "None found.")}`)

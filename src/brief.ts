@@ -10,11 +10,21 @@ import {
 import { AIWikiNotInitializedError, createDefaultConfig, loadAIWikiConfig } from "./config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
+import {
+  collectProjectIgnoreRules,
+  shouldIgnorePath
+} from "./ignore.js";
+import type { IgnoreRule } from "./ignore.js";
 import { appendLogEntry } from "./log.js";
 import type { OutputFormat } from "./output.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import type { SearchResult } from "./search.js";
 import { searchWikiMemory } from "./search.js";
+import {
+  collectWikiStalenessWarnings,
+  formatStalenessWarning
+} from "./staleness.js";
+import type { WikiStalenessWarning } from "./staleness.js";
 import type { AIWikiConfig } from "./types.js";
 
 export interface BriefOptions {
@@ -37,6 +47,7 @@ export interface DevelopmentBrief {
   tokenBudget: number;
   indexSummary: string;
   selectedDocs: string[];
+  stalenessWarnings?: WikiStalenessWarning[];
   sections: BriefSection[];
 }
 
@@ -49,6 +60,7 @@ export interface BriefResult {
 
 const DEFAULT_BRIEF_LIMIT = 8;
 const DISCOVERED_ENTRY_FILE_LIMIT = 10;
+const ARCHITECTURE_FOCUS_FILE_LIMIT = 6;
 const DISCOVERY_CONTENT_LIMIT = 12_000;
 const DISCOVERED_DOC_LIMIT = 10;
 
@@ -64,37 +76,6 @@ function unique(values: Array<string | undefined>): string[] {
 
 function normalizePath(filePath: string): string {
   return toPosixPath(filePath).replace(/^\.\//u, "");
-}
-
-function pathSegments(filePath: string): string[] {
-  return normalizePath(filePath).split("/");
-}
-
-function matchesPattern(relativePath: string, pattern: string): boolean {
-  const normalizedPattern = normalizePath(pattern).replace(/\/$/u, "");
-  const normalizedPath = normalizePath(relativePath);
-  const basename = path.posix.basename(normalizedPath);
-
-  if (normalizedPattern.endsWith("*")) {
-    const prefix = normalizedPattern.slice(0, -1);
-    return normalizedPath.startsWith(prefix) || basename.startsWith(prefix);
-  }
-
-  if (normalizedPattern.startsWith("*")) {
-    const suffix = normalizedPattern.slice(1);
-    return normalizedPath.endsWith(suffix) || basename.endsWith(suffix);
-  }
-
-  return (
-    normalizedPath === normalizedPattern ||
-    normalizedPath.startsWith(`${normalizedPattern}/`) ||
-    normalizedPath.includes(`/${normalizedPattern}/`) ||
-    pathSegments(normalizedPath).includes(normalizedPattern)
-  );
-}
-
-function shouldIgnore(relativePath: string, ignorePatterns: readonly string[]): boolean {
-  return ignorePatterns.some((pattern) => matchesPattern(relativePath, pattern));
 }
 
 function isSourceFile(relativePath: string): boolean {
@@ -135,7 +116,7 @@ async function readIndexSummary(rootDir: string): Promise<string> {
 
 async function walkSourceFiles(
   rootDir: string,
-  ignorePatterns: readonly string[],
+  ignoreRules: readonly IgnoreRule[],
   currentDir = rootDir
 ): Promise<string[]> {
   let entries;
@@ -154,12 +135,12 @@ async function walkSourceFiles(
     const fullPath = path.join(currentDir, entry.name);
     const relativePath = normalizePath(path.relative(rootDir, fullPath));
 
-    if (shouldIgnore(relativePath, ignorePatterns)) {
+    if (shouldIgnorePath(relativePath, ignoreRules)) {
       continue;
     }
 
     if (entry.isDirectory()) {
-      files.push(...(await walkSourceFiles(rootDir, ignorePatterns, fullPath)));
+      files.push(...(await walkSourceFiles(rootDir, ignoreRules, fullPath)));
     } else if (entry.isFile() && isSourceFile(relativePath)) {
       files.push(relativePath);
     }
@@ -170,7 +151,7 @@ async function walkSourceFiles(
 
 async function walkMarkdownFiles(
   rootDir: string,
-  ignorePatterns: readonly string[],
+  ignoreRules: readonly IgnoreRule[],
   currentDir = rootDir
 ): Promise<string[]> {
   let entries;
@@ -189,12 +170,12 @@ async function walkMarkdownFiles(
     const fullPath = path.join(currentDir, entry.name);
     const relativePath = normalizePath(path.relative(rootDir, fullPath));
 
-    if (shouldIgnore(relativePath, ignorePatterns)) {
+    if (shouldIgnorePath(relativePath, ignoreRules)) {
       continue;
     }
 
     if (entry.isDirectory()) {
-      files.push(...(await walkMarkdownFiles(rootDir, ignorePatterns, fullPath)));
+      files.push(...(await walkMarkdownFiles(rootDir, ignoreRules, fullPath)));
     } else if (entry.isFile() && isMarkdownFile(relativePath)) {
       files.push(relativePath);
     }
@@ -207,7 +188,53 @@ function taskLooksDocumentFocused(task: string): boolean {
   return /doc|docs|document|markdown|readme|prd|requirement|handoff|progress|note|stale|outdated|obsolete|文档|过时|梳理|需求|交接|记录|说明|有用/iu.test(task);
 }
 
-function taskDiscoveryTokens(task: string): string[] {
+function taskLooksTestFocused(task: string): boolean {
+  return /\b(test|tests|testing|spec|specs|regression|coverage)\b/iu.test(task);
+}
+
+function nameTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+async function readOptionalProjectFile(rootDir: string, filePath: string): Promise<string> {
+  try {
+    return await readFile(resolveProjectPath(rootDir, filePath), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+
+    throw error;
+  }
+}
+
+async function projectIdentityTokens(rootDir: string): Promise<string[]> {
+  const rootName = path.basename(path.resolve(rootDir));
+  const pyproject = await readOptionalProjectFile(rootDir, "pyproject.toml");
+  const pyprojectName = pyproject.match(/^\s*name\s*=\s*["']([^"']+)["']/mu)?.[1];
+  const packageJson = await readOptionalProjectFile(rootDir, "package.json");
+  let packageName: string | undefined;
+  if (packageJson) {
+    try {
+      const parsed = JSON.parse(packageJson) as { name?: unknown };
+      packageName = typeof parsed.name === "string" ? parsed.name : undefined;
+    } catch {
+      packageName = undefined;
+    }
+  }
+
+  return unique([
+    ...nameTokens(rootName),
+    ...nameTokens(pyprojectName ?? ""),
+    ...nameTokens(packageName ?? "")
+  ]);
+}
+
+function taskDiscoveryTokens(task: string, extraLowSignalTokens: string[] = []): string[] {
   const normalized = task.toLowerCase();
   const tokens = normalized
     .split(/[^a-z0-9_./-]+/u)
@@ -236,6 +263,16 @@ function taskDiscoveryTokens(task: string): string[] {
     tokens.push("auth", "login", "permission", "security");
   }
 
+  if (/\b(connect|connection|configuration|config)\b/iu.test(task)) {
+    tokens.push("connect", "connection", "config", "configuration");
+  }
+  if (/\b(notification|notify|message|messaging)\b/iu.test(task)) {
+    tokens.push("notification", "notify", "message", "messaging");
+  }
+  if (/\b(maintenance|maintain)\b/iu.test(task)) {
+    tokens.push("maintenance", "maintain", "maint");
+  }
+
   const lowSignal = new Set([
     "the",
     "and",
@@ -248,8 +285,15 @@ function taskDiscoveryTokens(task: string): string[] {
     "different",
     "project",
     "feature",
-    "markdown"
+    "markdown",
+    "app",
+    "web",
+    "page",
+    "pms"
   ]);
+  for (const token of extraLowSignalTokens) {
+    lowSignal.add(token);
+  }
 
   return unique(tokens).filter((token) => !lowSignal.has(token));
 }
@@ -257,7 +301,8 @@ function taskDiscoveryTokens(task: string): string[] {
 function scoreEntryFile(
   filePath: string,
   content: string,
-  tokens: string[]
+  tokens: string[],
+  task: string
 ): DiscoveredEntryFile | undefined {
   const normalizedPath = filePath.toLowerCase();
   const basename = path.posix.basename(normalizedPath, path.posix.extname(normalizedPath));
@@ -284,6 +329,14 @@ function scoreEntryFile(
     return undefined;
   }
 
+  if (
+    path.posix.extname(normalizedPath) === ".vue" &&
+    matchedTokens.size >= 2 &&
+    /\b(web|frontend|front-end|ui|page)\b/iu.test(task)
+  ) {
+    score += 12;
+  }
+
   const entrypointBoosts = [
     "page.",
     "route.",
@@ -299,6 +352,35 @@ function scoreEntryFile(
   }
   if (normalizedPath.startsWith("components/") || normalizedPath.startsWith("app/")) {
     score += 2;
+  }
+
+  const taskText = task.toLowerCase();
+  if (normalizedPath.startsWith("apps/") && !/\b(app|apps|application|deepresearch|harbor|swebench)\b/iu.test(taskText)) {
+    score -= 16;
+  }
+  if (normalizedPath.startsWith("cli/") && !/\b(cli|command|terminal|interactive|picker)\b/iu.test(taskText)) {
+    score -= 10;
+  }
+  if (normalizedPath.startsWith("examples/") && !/\b(example|examples|demo|sample)\b/iu.test(taskText)) {
+    score -= 16;
+  }
+  if (normalizedPath.includes("/skills/") && !/\b(skill|skills)\b/iu.test(taskText)) {
+    score -= 10;
+  }
+  if (normalizedPath.includes("/plan/") && !/\b(plan|planning)\b/iu.test(taskText)) {
+    score -= 8;
+  }
+  if (
+    (normalizedPath.startsWith("tests/") ||
+      normalizedPath.includes("/tests/") ||
+      /(?:^|\/)(test_|.+\.test\.|.+\.spec\.)/u.test(normalizedPath)) &&
+    !taskLooksTestFocused(task)
+  ) {
+    score -= 8;
+  }
+
+  if (score <= 0) {
+    return undefined;
   }
 
   return {
@@ -385,21 +467,22 @@ function scoreMarkdownDoc(
 async function discoverEntryFiles(
   rootDir: string,
   task: string,
-  ignorePatterns: readonly string[]
+  ignoreRules: readonly IgnoreRule[],
+  extraLowSignalTokens: string[] = []
 ): Promise<string[]> {
-  const tokens = taskDiscoveryTokens(task);
+  const tokens = taskDiscoveryTokens(task, extraLowSignalTokens);
   if (tokens.length === 0) {
     return [];
   }
 
-  const files = await walkSourceFiles(rootDir, ignorePatterns);
+  const files = await walkSourceFiles(rootDir, ignoreRules);
   const scored: DiscoveredEntryFile[] = [];
   for (const filePath of files) {
     const content = (await readFile(resolveProjectPath(rootDir, filePath), "utf8")).slice(
       0,
       DISCOVERY_CONTENT_LIMIT
     );
-    const score = scoreEntryFile(filePath, content, tokens);
+    const score = scoreEntryFile(filePath, content, tokens, task);
     if (score) {
       scored.push(score);
     }
@@ -415,14 +498,15 @@ async function discoverEntryFiles(
 async function discoverMarkdownDocs(
   rootDir: string,
   task: string,
-  ignorePatterns: readonly string[]
+  ignoreRules: readonly IgnoreRule[],
+  extraLowSignalTokens: string[] = []
 ): Promise<string[]> {
   if (!taskLooksDocumentFocused(task)) {
     return [];
   }
 
-  const tokens = taskDiscoveryTokens(task);
-  const files = await walkMarkdownFiles(rootDir, ignorePatterns);
+  const tokens = taskDiscoveryTokens(task, extraLowSignalTokens);
+  const files = await walkMarkdownFiles(rootDir, ignoreRules);
   const scored: DiscoveredEntryFile[] = [];
   for (const filePath of files) {
     const content = await readFile(resolveProjectPath(rootDir, filePath), "utf8");
@@ -476,6 +560,10 @@ function selectDiverseEntryFiles(
   return [...selected.values()]
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
     .slice(0, DISCOVERED_ENTRY_FILE_LIMIT);
+}
+
+function discoveredPath(item: string): string {
+  return item.replace(/\s+\(matched:.*\)$/u, "");
 }
 
 function relatedModules(results: SearchResult[]): string[] {
@@ -663,6 +751,7 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
     sectionItems(brief, "Known Pitfalls"),
     "No matching pitfall pages found."
   );
+  const stalenessWarnings = brief.stalenessWarnings ?? [];
   const acceptance = sectionItems(brief, "Acceptance Criteria");
   const architectureGuard = sectionItems(brief, "Architecture Guard");
   const graphify = sectionItems(brief, "Graphify Structural Context");
@@ -715,6 +804,20 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
     {
       title: "Pitfalls",
       items: compactItems(pitfalls, "No matching pitfalls found.")
+    },
+    {
+      title: "Staleness Warnings",
+      items:
+        stalenessWarnings.length > 0
+          ? [
+              ...stalenessWarnings.slice(0, 3).map(formatStalenessWarning),
+              ...(stalenessWarnings.length > 3
+                ? [
+                    `${stalenessWarnings.length - 3} more staleness warning(s) omitted from markdown; use --format json for full context.`
+                  ]
+                : [])
+            ]
+          : ["No stale wiki memory warnings for selected context."]
     },
     {
       title: "Suggested Tests",
@@ -816,28 +919,44 @@ export async function generateDevelopmentBrief(
   }
 
   const indexSummary = await readIndexSummary(rootDir);
-  const ignorePatterns = unique([
-    ...PROJECT_SCAN_EXCLUDED_PATHS,
-    ...config.ignore
-  ]);
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    PROJECT_SCAN_EXCLUDED_PATHS,
+    config.ignore
+  );
   const search = await searchWikiMemory(rootDir, task, {
     limit: options.limit ?? DEFAULT_BRIEF_LIMIT
   });
   const results = search.results;
+  const stalenessWarnings = await collectWikiStalenessWarnings(
+    rootDir,
+    results.map((result) => result.page)
+  );
   const selectedDocs = results.map(pageDocPath);
   const modules = relatedModules(results);
   const riskFiles = highRiskFiles(results, config.riskFiles);
   const readFiles = mustReadFiles(results, riskFiles);
+  const documentFocused = taskLooksDocumentFocused(task);
+  const identityTokens = await projectIdentityTokens(rootDir);
+  const discoveredDocs = await discoverMarkdownDocs(
+    rootDir,
+    task,
+    ignoreRules,
+    identityTokens
+  );
+  const discoveredEntryFiles = documentFocused
+    ? []
+    : await discoverEntryFiles(rootDir, task, ignoreRules, identityTokens);
   const architecture = await generateArchitectureBriefContext(rootDir, task, {
     modules,
     highRiskFiles: riskFiles,
-    ignorePatterns: config.ignore
+    ignorePatterns: config.ignore,
+    focusFiles: [
+      ...readFiles.filter((file) => !file.startsWith("wiki/")),
+      ...discoveredEntryFiles.slice(0, ARCHITECTURE_FOCUS_FILE_LIMIT).map(discoveredPath),
+      ...discoveredDocs.slice(0, ARCHITECTURE_FOCUS_FILE_LIMIT).map(discoveredPath)
+    ]
   });
-  const documentFocused = taskLooksDocumentFocused(task);
-  const discoveredDocs = await discoverMarkdownDocs(rootDir, task, ignorePatterns);
-  const discoveredEntryFiles = documentFocused
-    ? []
-    : await discoverEntryFiles(rootDir, task, ignorePatterns);
   const graphify = options.withGraphify
     ? await loadGraphifyContext(rootDir)
     : undefined;
@@ -848,6 +967,7 @@ export async function generateDevelopmentBrief(
     tokenBudget: config.tokenBudget.brief,
     indexSummary,
     selectedDocs,
+    stalenessWarnings,
     sections: [
       {
         title: "Task",

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -158,7 +158,58 @@ describe("generateFileGuardrails", () => {
     expect(result.guardrails.matchedDocs).toEqual([]);
     expect(result.markdown).toContain("No related modules found.");
     expect(result.markdown).toContain("No matching rules found.");
+    expect(result.markdown).toContain("No stale wiki memory warnings for matched context.");
     expect(result.markdown).toContain("wiki/files/src-unknown.md");
+  });
+
+  it("surfaces staleness warnings for matched file memory", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addGuardMemory(rootDir);
+    const targetFile = path.join(rootDir, "src", "app", "api", "stripe", "webhook", "route.ts");
+    await mkdir(path.dirname(targetFile), { recursive: true });
+    await writeFile(targetFile, "export const route = true;\n", "utf8");
+    await mkdir(path.join(rootDir, "src", "lib"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "src", "lib", "stripe.ts"),
+      "export const stripe = true;\n",
+      "utf8"
+    );
+    await utimes(
+      targetFile,
+      new Date("2026-04-01T00:00:00Z"),
+      new Date("2026-04-01T00:00:00Z")
+    );
+
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "payment.md"),
+      {
+        type: "module",
+        title: "Payment",
+        modules: ["payment"],
+        files: ["src/app/api/stripe/webhook/route.ts"],
+        risk: "high",
+        last_updated: "2026-03-01"
+      },
+      "# Module: Payment\n\nStripe webhook and billing flows live here.\n"
+    );
+
+    const result = await generateFileGuardrails(
+      rootDir,
+      "src/app/api/stripe/webhook/route.ts"
+    );
+    const parsed = JSON.parse(result.json) as {
+      stalenessWarnings?: Array<{ code: string; file: string }>;
+    };
+
+    expect(result.markdown).toContain("## Staleness Warnings");
+    expect(result.markdown).toContain("stale_referenced_file");
+    expect(parsed.stalenessWarnings).toEqual([
+      expect.objectContaining({
+        code: "stale_referenced_file",
+        file: "src/app/api/stripe/webhook/route.ts"
+      })
+    ]);
   });
 
   it("formats markdown and json output", async () => {

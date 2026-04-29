@@ -9,7 +9,8 @@ import { initAIWiki } from "../src/init.js";
 import type { AIWikiConfig } from "../src/types.js";
 import {
   formatArchitectureAuditMarkdown,
-  generateArchitectureAudit
+  generateArchitectureAudit,
+  generateArchitectureBriefContext
 } from "../src/architecture.js";
 
 const execFileAsync = promisify(execFile);
@@ -105,5 +106,57 @@ describe("generateArchitectureAudit", () => {
 
     expect(stdout).toContain("# Architecture Audit: demo");
     expect(stdout).toContain("Hardcoding Risks");
+  });
+});
+
+describe("generateArchitectureBriefContext", () => {
+  it("does not fall back to all large files when focus files are shallow paths", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "cli/picker.py", "def pick():\n    return 'picker'\n");
+    await writeProjectFile(
+      rootDir,
+      "apps/deepresearch/static/app.js",
+      Array.from({ length: 900 }, (_, index) => `export const app${index} = ${index};`).join("\n")
+    );
+    await writeProjectFile(
+      rootDir,
+      "examples/full_app/static/app.js",
+      Array.from({ length: 900 }, (_, index) => `export const example${index} = ${index};`).join("\n")
+    );
+
+    const context = await generateArchitectureBriefContext(
+      rootDir,
+      "fix interactive CLI picker display behavior",
+      { focusFiles: ["cli/picker.py"] }
+    );
+    const boundaries = context.architectureBoundaries.join("\n");
+
+    expect(boundaries).toContain("No large-file structure warnings detected.");
+    expect(boundaries).not.toContain("apps/deepresearch/static/app.js");
+    expect(boundaries).not.toContain("examples/full_app/static/app.js");
+  });
+
+  it("keeps focused brief warnings on exact files instead of expanding whole directories", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(
+      rootDir,
+      "pydantic_deep/toolsets/skills/toolset.py",
+      Array.from({ length: 650 }, (_, index) => `TOOLSET_${index} = ${index}`).join("\n")
+    );
+    await writeProjectFile(
+      rootDir,
+      "pydantic_deep/toolsets/skills/backend.py",
+      Array.from({ length: 650 }, (_, index) => `BACKEND_${index} = ${index}`).join("\n")
+    );
+
+    const context = await generateArchitectureBriefContext(
+      rootDir,
+      "modify skill toolset behavior",
+      { focusFiles: ["pydantic_deep/toolsets/skills/toolset.py"] }
+    );
+    const boundaries = context.architectureBoundaries.join("\n");
+
+    expect(boundaries).toContain("pydantic_deep/toolsets/skills/toolset.py");
+    expect(boundaries).not.toContain("pydantic_deep/toolsets/skills/backend.py");
   });
 });

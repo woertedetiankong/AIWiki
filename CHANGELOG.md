@@ -12,6 +12,9 @@ This file summarizes the implementation history that used to live in root-level
 - Added module portability workflows through `aiwiki module export`, `aiwiki module import`, `aiwiki module brief`, and `aiwiki module lint`.
 - Hardened task continuity so task status and resume output are derived from `checkpoints.jsonl`.
 - Added `SPEC.md`, `SPEC-FUTURE.md`, and `README.md` as the current documentation set.
+- Hardened Codex-facing `brief`, `guard`, `lint`, and `module brief` output with compact sections, advisory staleness warnings, and stable empty states.
+- Improved cold-start project scans across mixed frontend/backend and Python repositories with Python cache ignores, `.gitignore` support, config ignore overrides, and task-relevant file ranking.
+- Dogfooded cold-start `brief` and `guard` on `D:\newproject\lianjiepeizhi\pms` and `D:\llm\pydantic-deepagents` without creating `.aiwiki/` in those target projects.
 
 Verification recorded during documentation cleanup:
 
@@ -21,7 +24,7 @@ npm run test
 npm run build
 ```
 
-Result: 19 test files passed, 91 tests passed.
+Result: 20 test files passed, 110 tests passed.
 
 ## Milestone Summary
 

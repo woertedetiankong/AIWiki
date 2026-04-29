@@ -376,12 +376,19 @@ describe("module packs", () => {
 
     expect(result.markdown).toContain("# Module Brief: payment");
     expect(result.markdown).toContain("## Must Read");
-    expect(result.markdown).toContain("## Porting Rules");
+    expect(result.markdown).toContain("## Do Not");
+    expect(result.markdown).toContain("## Rules");
     expect(result.markdown).toContain("## Pitfalls");
-    expect(result.markdown).toContain("## Configuration and Boundary Notes");
     expect(result.markdown).toContain("## Suggested Tests");
+    expect(result.markdown).toContain("## Other Context");
     expect(result.markdown.indexOf("## Must Read")).toBeLessThan(
-      result.markdown.indexOf("## Porting Rules")
+      result.markdown.indexOf("## Do Not")
+    );
+    expect(result.markdown.indexOf("## Do Not")).toBeLessThan(
+      result.markdown.indexOf("## Rules")
+    );
+    expect(result.markdown.indexOf("## Rules")).toBeLessThan(
+      result.markdown.indexOf("## Pitfalls")
     );
     expect(result.markdown).toContain("Do not copy source code directly");
     expect(result.markdown).toContain("Stripe raw body");

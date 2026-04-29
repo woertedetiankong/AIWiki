@@ -1,6 +1,6 @@
 # AIWiki Future Specification
 
-Status: Draft backlog
+Status: Draft backlog, refreshed after Codex dogfood and staleness hardening passes on 2026-04-29.
 
 Purpose: Track optional and not-yet-implemented AIWiki capabilities separately from `SPEC.md`,
 which describes the current implemented CLI contract.
@@ -8,44 +8,149 @@ which describes the current implemented CLI contract.
 Future work in this document MUST remain optional, additive, local-first by default, preview-first
 for durable memory writes, and covered by tests before it moves into `SPEC.md`.
 
+## Current Dogfood Baseline
+
+The 2026-04-29 Codex dogfood pass made the current local CLI usable as an alpha
+Codex project-memory workflow. The following should be treated as implemented
+baseline, not future backlog:
+
+- `brief` and `guard` can run in read-only cold-start mode before `.aiwiki/`
+  exists.
+- `brief` Markdown is compact by default and points to `--format json` for full
+  context.
+- `resume` starts with the most actionable next step and limits long lists.
+- `reflect` quotes generated `aiwiki apply "<path>"` commands for Windows paths
+  with spaces.
+- `reflect` previews candidate wiki writes and scopes module candidates to the
+  files that inferred the module.
+- `map --write` regenerates `.aiwiki/index.md` so `lint` does not report a stale
+  missing project-map entry.
+- `.aiwiki/` dogfood memory is initialized for this repository, with runtime
+  artifacts ignored by `.gitignore`.
+- `AGENTS.md` now requires dogfood testing for Codex-facing workflow changes.
+- `lint` warns when wiki frontmatter `files` entries point to missing project
+  files or files newer than the page's `last_updated` value.
+- `brief` and `guard` include compact advisory `Staleness Warnings` for selected
+  memory, with full warning details in JSON output.
+- `module brief` uses the same compact Codex-facing section style as `brief` and
+  `guard`.
+- Project scans combine built-in generated/dependency ignores, repository
+  `.gitignore`, and `.aiwiki/config.json` `ignore` overrides.
+- Cold-start `brief` ranking was dogfooded and tuned on a mixed PMS repository
+  and the Python `pydantic-deepagents` repository without writing `.aiwiki/` into
+  those target projects.
+
+## Next Session Recommended Order
+
+Start the next implementation session here before taking on larger adapters:
+
+1. Run the dogfood loop on this repository:
+   `brief`, targeted `guard`, `resume`, `reflect --from-git-diff --output-plan`,
+   and `apply <plan>` preview.
+2. Extend `reflect --from-git-diff` so changed files can suggest refresh entries
+   for related stale wiki pages.
+3. Improve install/dev command ergonomics, especially Windows + npm argument
+   forwarding.
+4. Continue cross-project dogfood when changing ranking or scan heuristics.
+5. Only then consider optional adapters such as code-context, semantic memory, or
+   deep-context.
+
 ## Near-Term Hardening Before Future Adapters
 
 The next implementation phase should improve the current CLI before adding large optional systems
 such as code-context, semantic indexing, prompt optimization, or deep-context.
 
-### Codex Usability Pass
+### Continuing Codex Usability Pass
 
-Goal: make AIWiki outputs immediately useful to Codex during normal coding work.
+Goal: make AIWiki outputs consistently useful to Codex across projects, not only
+inside the AIWiki repository.
 
-Requirements:
+Implemented first slice:
 
-- `brief`, `guard`, `resume`, and `module brief` SHOULD put the highest-signal actions first.
-- Markdown output SHOULD avoid product explanation and long background sections.
-- Markdown output SHOULD distinguish:
-  - `Must Read`
-  - `Do Not`
-  - `Rules`
-  - `Pitfalls`
-  - `Suggested Tests`
-  - `Staleness Warnings` when applicable
-- Common `brief` and `guard` outputs SHOULD fit in roughly one to one-and-a-half terminal screens.
+- `brief` can run read-only before `.aiwiki/` exists and reports cold-start mode.
+- `brief` ranking downranks package-name noise, generated/dependency directories,
+  unrelated app/example/CLI subprojects, and tests for non-test tasks.
+- `brief` prefers implementation files for common fix tasks while preserving JSON
+  detail for fuller context.
+- Project scans respect built-in defaults, root `.gitignore`, and config ignore
+  overrides.
+
+Remaining requirements:
+
+- Codex-facing Markdown output SHOULD continue to distinguish `Must Read`, `Do
+  Not`, `Rules`, `Pitfalls`, `Suggested Tests`, and `Staleness Warnings` when
+  applicable.
+- Common `brief`, `guard`, `resume`, and `reflect` outputs SHOULD fit in roughly
+  one to one-and-a-half terminal screens.
 - JSON output MAY remain more complete than Markdown output.
 - Empty and unknown states MUST remain stable, short, and tested.
-- Tests SHOULD pin section order and representative concise output.
+- Tests SHOULD continue to pin section order and representative concise output.
+- README development commands SHOULD be reliable on Windows PowerShell. If
+  `npm run dev -- ...` argument forwarding remains fragile, document `npx tsx
+  src/cli.ts ...` as the preferred local dogfood command.
 
-### Freshness / Staleness Pass
+### Remaining Freshness / Staleness Work
 
 Goal: make stale wiki memory visible before it misleads a coding agent.
 
-Planned behavior:
+Implemented first slice:
 
-- `aiwiki lint` SHOULD warn when wiki frontmatter `files` entries point to missing project files.
-- `aiwiki lint` SHOULD warn when referenced files changed after a wiki page's `last_updated` value.
-- `aiwiki brief` and `aiwiki guard` SHOULD include compact staleness warnings for selected memory.
-- `aiwiki reflect --from-git-diff` SHOULD map changed files back to related wiki pages and suggest
-  append/update plan entries when those pages may need refresh.
-- Staleness warnings MUST be advisory and MUST NOT block normal command output.
-- All checks MUST stay local and MUST NOT require semantic indexing or remote services.
+- `aiwiki lint` warns when wiki frontmatter `files` entries point to missing
+  project files.
+- `aiwiki lint` warns when referenced files changed after a wiki page's
+  `last_updated` value, using local filesystem modification time.
+- `aiwiki brief` and `aiwiki guard` include compact staleness warnings for
+  selected memory and keep full warning details in JSON output.
+- Staleness warnings are advisory and do not block normal command output.
+- Checks stay local and do not require semantic indexing or remote services.
+
+Remaining planned behavior:
+
+- `aiwiki reflect --from-git-diff` SHOULD map changed files back to related wiki
+  pages and suggest append/update plan entries when those pages may need refresh.
+- Future freshness checks MAY use git history when it improves precision, but
+  MUST keep filesystem-only behavior available.
+- Future commands that show selected memory SHOULD reuse the shared staleness
+  helper instead of reimplementing file/date checks.
+
+### Multi-Project Dogfood Pass
+
+Goal: prove the workflow is useful outside AIWiki itself before larger feature
+work begins.
+
+Completed first slice:
+
+- Tested against `D:\newproject\lianjiepeizhi\pms`, including frontend files
+  added under the same project root.
+- Tested against `D:\llm\pydantic-deepagents`, including Python virtualenv/cache
+  noise and package-name ranking noise.
+- Captured and fixed generalized findings in ignore handling, cold-start ranking,
+  and architecture warning focus.
+
+Ongoing requirements:
+
+- Re-run real-project dogfood whenever ranking or scan heuristics change.
+- Capture where `reflect` proposes overly broad module memory.
+- Do not add project-specific heuristics unless they generalize across local
+  codebases.
+- Record reusable findings in reviewed `.aiwiki/wiki/` pages only after preview.
+
+### Runtime Artifact Policy
+
+Goal: keep committed AIWiki memory durable while leaving local run artifacts
+private by default.
+
+Requirements:
+
+- `.aiwiki/config.json`, `.aiwiki/AGENTS.md`, `.aiwiki/index.md`, prompt
+  templates, `.gitkeep` structure files, and reviewed wiki pages MAY be
+  committed.
+- `.aiwiki/evals/*.jsonl`, `.aiwiki/graph/*.json`,
+  `.aiwiki/context-packs/*.json`, `.aiwiki/log.md`, and `.aiwiki/tasks/*` SHOULD
+  remain local runtime artifacts unless the user explicitly asks to preserve a
+  run.
+- Future commands that create new runtime artifact paths SHOULD update the
+  default ignore guidance and tests.
 
 ## 1. Promotion Rules
 

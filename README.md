@@ -17,6 +17,15 @@ For local development, run commands through the source entrypoint:
 npm run dev -- <command>
 ```
 
+When dogfooding the source CLI against another local project on Windows
+PowerShell, keep the target project as the current working directory and call the
+AIWiki checkout's `tsx.cmd` directly:
+
+```powershell
+cd D:\path\to\target-project
+& "D:\path\to\AIWiki\node_modules\.bin\tsx.cmd" "D:\path\to\AIWiki\src\cli.ts" brief "implement the next feature"
+```
+
 After publishing or linking the package, the binary is:
 
 ```bash
@@ -57,6 +66,10 @@ aiwiki apply .aiwiki/context-packs/reflect-plan.json
 
 `brief` and `guard` are safe to run before initialization. In that cold-start mode they perform a read-only project scan, print setup guidance, and do not create `.aiwiki/` files. Run `aiwiki init --project-name <name>` and `aiwiki map --write` when the project is ready to keep durable local memory.
 
+Project scans combine AIWiki's built-in generated/dependency ignores, the repository `.gitignore`, and `.aiwiki/config.json` `ignore` rules. Later rules can use `!path` to re-include a file, so project owners can tune noisy or unusual repositories without changing AIWiki code.
+
+`lint`, `brief`, and `guard` surface advisory staleness warnings when wiki memory references missing files or files that changed after the page's `last_updated` value. These warnings do not block normal output.
+
 Most Codex sessions should only need `brief`, `guard`, `checkpoint`, `resume`, and `reflect`. The rest of the command surface is for maintaining memory, graph relations, module packs, and reviewed updates.
 
 ## Command Surface
@@ -96,6 +109,7 @@ Important source files:
 
 - `src/cli.ts`: command registration and option parsing.
 - `src/constants.ts`: product paths, default directories, ignore lists, token budgets, and scan constants.
+- `src/ignore.ts`: shared project scan ignore rules, including `.gitignore` and config overrides.
 - `src/templates.ts`: default `.aiwiki/` Markdown and prompt templates.
 - `src/managed-write.ts`: non-overwrite and forceable-template write policy.
 - `src/brief.ts`, `src/guard.ts`, `src/reflect.ts`, `src/ingest.ts`, `src/apply.ts`: core memory workflow services.
@@ -112,9 +126,10 @@ Product and implementation documents:
 
 Next development focus:
 
-- First improve current CLI usability for Codex: concise `brief`, `guard`, `resume`, `reflect`, and `module brief` output.
-- Then add freshness / staleness checks so `.aiwiki/wiki/` memory does not silently drift away from code.
-- Treat larger items in `SPEC-FUTURE.md` as backlog until the current CLI feels fast, short, and trustworthy.
+- Continue improving current CLI usability for Codex from real-project dogfood feedback.
+- Add `reflect --from-git-diff` suggestions for wiki pages made stale by changed files.
+- Improve Windows local dogfood command ergonomics and document the most reliable source-entrypoint command.
+- Treat larger items in `SPEC-FUTURE.md` as backlog until the current CLI feels fast, short, and trustworthy across multiple projects.
 
 ## Verify
 

@@ -5,6 +5,11 @@ import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
+import {
+  collectWikiStalenessWarnings,
+  formatStalenessWarning
+} from "./staleness.js";
+import type { WikiStalenessWarning } from "./staleness.js";
 import type { AIWikiConfig, RiskLevel, WikiPage, WikiPageType } from "./types.js";
 import { findWikiPages } from "./wiki-store.js";
 
@@ -23,6 +28,7 @@ export interface FileGuardrails {
   filePath: string;
   matchedDocs: string[];
   suggestedFileNote: string;
+  stalenessWarnings?: WikiStalenessWarning[];
   sections: FileGuardrailSection[];
 }
 
@@ -328,6 +334,7 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
     sectionItems(guardrails, "Known Pitfalls"),
     "No matching pitfall pages found."
   );
+  const stalenessWarnings = guardrails.stalenessWarnings ?? [];
   const decisions = withoutFallback(
     sectionItems(guardrails, "Related Decisions"),
     "No matching decision pages found."
@@ -351,6 +358,20 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
     {
       title: "Pitfalls",
       items: stableItems(pitfalls, "No matching pitfalls found.")
+    },
+    {
+      title: "Staleness Warnings",
+      items:
+        stalenessWarnings.length > 0
+          ? [
+              ...stalenessWarnings.slice(0, 3).map(formatStalenessWarning),
+              ...(stalenessWarnings.length > 3
+                ? [
+                    `${stalenessWarnings.length - 3} more staleness warning(s) omitted from markdown; use --format json for full context.`
+                  ]
+                : [])
+            ]
+          : ["No stale wiki memory warnings for matched context."]
     },
     {
       title: "Required Checks",
@@ -421,6 +442,7 @@ export async function generateFileGuardrails(
   }
 
   const pages = sortPages([...pagesByPath.values()]);
+  const stalenessWarnings = await collectWikiStalenessWarnings(rootDir, pages);
   const modules = relatedModules(pages);
   const rulePages = pagesOfType(pages, "rule");
   const pitfallPages = pagesOfType(pages, "pitfall");
@@ -434,6 +456,7 @@ export async function generateFileGuardrails(
     filePath: normalizedFile,
     matchedDocs: pages.map(docPath),
     suggestedFileNote,
+    stalenessWarnings,
     sections: [
       ...(!initialized
         ? [
