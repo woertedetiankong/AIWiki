@@ -43,6 +43,7 @@ export interface TaskCloseOptions {
 
 export interface TaskResumeOptions {
   output?: string;
+  readOnly?: boolean;
 }
 
 export interface TaskDecisionOptions {
@@ -738,15 +739,23 @@ export async function resumeTask(
   taskId?: string,
   options: TaskResumeOptions = {}
 ): Promise<TaskCommandResult<TaskResumeData>> {
+  if (options.readOnly && options.output) {
+    throw new Error("Cannot use --read-only with --output because --output writes a file.");
+  }
+
   await loadAIWikiConfig(rootDir);
   const id = await resolveTaskId(rootDir, taskId);
   const status = await loadStatus(rootDir, id);
   const resume = resumeMarkdown(status);
-  const outputPath = options.output
-    ? resolveProjectPath(rootDir, options.output)
-    : taskFile(rootDir, id, "resume.md");
-  await mkdir(path.dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, resume, "utf8");
+  const outputPath = options.readOnly
+    ? undefined
+    : options.output
+      ? resolveProjectPath(rootDir, options.output)
+      : taskFile(rootDir, id, "resume.md");
+  if (outputPath) {
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, resume, "utf8");
+  }
   const data: TaskResumeData = { ...status, resume, outputPath };
   return { data, markdown: resume, json: toJson(data) };
 }

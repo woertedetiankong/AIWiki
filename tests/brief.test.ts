@@ -135,6 +135,40 @@ describe("generateDevelopmentBrief", () => {
     expect(evals).toContain("\"task\":\"stripe webhook\"");
   });
 
+  it("supports read-only briefs without appending log or eval data", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addRelevantMemory(rootDir);
+    const logPath = path.join(rootDir, ".aiwiki", "log.md");
+    const evalPath = path.join(rootDir, ".aiwiki", "evals", "brief-cases.jsonl");
+    const initialLog = await readFile(logPath, "utf8");
+    const initialEvals = await readFile(evalPath, "utf8");
+
+    const result = await generateDevelopmentBrief(rootDir, "stripe webhook", {
+      readOnly: true
+    });
+
+    expect(result.markdown).toContain("# Development Brief: stripe webhook");
+    expect(await readFile(logPath, "utf8")).toBe(initialLog);
+    expect(await readFile(evalPath, "utf8")).toBe(initialEvals);
+  });
+
+  it("rejects read-only briefs that request output files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    await expect(
+      generateDevelopmentBrief(rootDir, "stripe webhook", {
+        readOnly: true,
+        output: ".aiwiki/context-packs/current.md"
+      })
+    ).rejects.toThrow("Cannot use --read-only with --output");
+
+    await expect(
+      readFile(path.join(rootDir, ".aiwiki", "context-packs", "current.md"), "utf8")
+    ).rejects.toThrow();
+  });
+
   it("includes architecture, hardcoding, portability, and module memory guidance by default", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

@@ -44,6 +44,11 @@ Important boundary:
   work and are tracked in `SPEC-FUTURE.md`.
 - AIWiki's durable state lives under the project-local `.aiwiki/` directory unless a command
   explicitly writes to a user-provided project-local output path.
+- Command write semantics are explicit:
+  - Read-only commands or `--read-only` mode MUST NOT write any files.
+  - Preview-only commands MUST NOT write long-term wiki memory, but MAY write runtime log/eval
+    records unless `--read-only` is provided.
+  - Confirmed writes MUST require an explicit confirmation flag or command path.
 
 ## 2. Goals and Non-Goals
 
@@ -448,7 +453,7 @@ Usage:
 ```bash
 aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force]
                     [--with-graphify] [--architecture-guard]
-                    [--format markdown|json]
+                    [--read-only] [--format markdown|json]
 ```
 
 Behavior:
@@ -487,8 +492,10 @@ Behavior:
   - Suggested Must-Read Files
   - Acceptance Criteria
   - Notes for Codex
-- MUST append an eval case to `.aiwiki/evals/brief-cases.jsonl`.
-- MUST append a log entry.
+- MUST append an eval case to `.aiwiki/evals/brief-cases.jsonl` unless `--read-only` is provided.
+- MUST append a log entry unless `--read-only` is provided.
+- `--read-only` MUST NOT write log entries, eval cases, or output files.
+- `--read-only` MUST reject `--output`.
 - `--output` MUST write inside the project root.
 - `--output` MUST NOT overwrite existing files unless `--force` is provided.
 
@@ -556,7 +563,8 @@ Usage:
 
 ```bash
 aiwiki reflect [--from-git-diff] [--notes <path>] [--limit <n>]
-               [--output-plan <path>] [--force] [--format markdown|json]
+               [--output-plan <path>] [--force] [--read-only]
+               [--format markdown|json]
 ```
 
 Behavior:
@@ -580,7 +588,10 @@ Behavior:
 - MUST generate an `updatePlanDraft` when reusable wiki updates can be inferred.
 - `--output-plan` MUST write the update plan draft to a project-local JSON file.
 - `--output-plan` MUST NOT overwrite an existing file unless `--force` is provided.
-- MUST append reflect eval data to `.aiwiki/evals/reflect-cases.jsonl`.
+- MUST append reflect eval data to `.aiwiki/evals/reflect-cases.jsonl` unless `--read-only` is
+  provided.
+- `--read-only` MUST NOT write eval cases or output plan files.
+- `--read-only` MUST reject `--output-plan`.
 
 Future behavior:
 
@@ -835,7 +846,7 @@ Behavior:
 Usage:
 
 ```bash
-aiwiki resume [id] [--output <path>] [--format markdown|json]
+aiwiki resume [id] [--output <path>] [--read-only] [--format markdown|json]
 ```
 
 Behavior:
@@ -845,6 +856,9 @@ Behavior:
 - MUST include completed work, in-progress work, not-started work, decisions, blockers, changed
   files, tests, and next recommended steps.
 - MUST remind the next agent not to restart from scratch.
+- MUST write the generated resume to `.aiwiki/tasks/<id>/resume.md` by default.
+- `--read-only` MUST print or return the resume brief without writing `.aiwiki/tasks/<id>/resume.md`.
+- `--read-only` MUST reject `--output`.
 - `--output` MUST write inside the project root.
 
 ### 6.20 `aiwiki decision`
@@ -920,6 +934,10 @@ Commands MUST reject writes outside the project root unless explicitly specified
 ### 8.3 Preview-First Rule
 
 Potentially destructive or long-term memory-changing operations MUST be preview-first.
+
+Preview-first is not identical to read-only. A preview command MAY write runtime telemetry or
+workflow records such as `.aiwiki/log.md` or `.aiwiki/evals/*.jsonl`. When a command supports
+`--read-only`, that mode MUST suppress all filesystem writes for that command.
 
 Examples:
 

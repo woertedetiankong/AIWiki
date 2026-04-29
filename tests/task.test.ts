@@ -105,6 +105,74 @@ describe("AIWiki task continuity", () => {
     expect(resume.markdown).toContain("Implement resume");
   });
 
+  it("writes resume files by default", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Default resume write", { id: "default-resume" });
+    await checkpointTask(rootDir, {
+      step: "core work",
+      status: "done",
+      next: ["ship it"]
+    });
+    const resumePath = path.join(
+      rootDir,
+      ".aiwiki",
+      "tasks",
+      "default-resume",
+      "resume.md"
+    );
+    await writeFile(resumePath, "stale resume\n", "utf8");
+
+    await resumeTask(rootDir);
+
+    const resumeFile = await readFile(resumePath, "utf8");
+    expect(resumeFile).toContain("# Resume Brief for Codex");
+    expect(resumeFile).toContain("ship it");
+    expect(resumeFile).not.toContain("stale resume");
+  });
+
+  it("supports read-only resume output without rewriting resume files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Read-only resume", { id: "readonly-resume" });
+    await checkpointTask(rootDir, {
+      step: "core work",
+      status: "done",
+      next: ["continue safely"]
+    });
+    const resumePath = path.join(
+      rootDir,
+      ".aiwiki",
+      "tasks",
+      "readonly-resume",
+      "resume.md"
+    );
+    await writeFile(resumePath, "custom user resume\n", "utf8");
+
+    const result = await resumeTask(rootDir, undefined, { readOnly: true });
+
+    expect(result.markdown).toContain("continue safely");
+    expect(result.data.outputPath).toBeUndefined();
+    expect(await readFile(resumePath, "utf8")).toBe("custom user resume\n");
+  });
+
+  it("rejects read-only resume output paths", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Read-only output", { id: "readonly-output" });
+
+    await expect(
+      resumeTask(rootDir, undefined, {
+        readOnly: true,
+        output: ".aiwiki/context-packs/resume.md"
+      })
+    ).rejects.toThrow("Cannot use --read-only with --output");
+
+    await expect(
+      readFile(path.join(rootDir, ".aiwiki", "context-packs", "resume.md"), "utf8")
+    ).rejects.toThrow();
+  });
+
   it("uses the latest checkpoint next steps in resume output", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

@@ -32,6 +32,8 @@ baseline, not future backlog:
   files or files newer than the page's `last_updated` value.
 - `brief` and `guard` include compact advisory `Staleness Warnings` for selected
   memory, with full warning details in JSON output.
+- `brief`, `reflect`, and `resume` support explicit `--read-only` mode for
+  Codex context gathering with no filesystem writes.
 - `module brief` uses the same compact Codex-facing section style as `brief` and
   `guard`.
 - Project scans combine built-in generated/dependency ignores, repository

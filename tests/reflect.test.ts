@@ -280,6 +280,51 @@ describe("generateReflectPreview", () => {
     expect(evals[0]?.updatePlanDraftEntries).toBeGreaterThanOrEqual(1);
   });
 
+  it("supports read-only reflection previews without appending eval data", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Auth rule\n\nAuth routes must check permissions server-side.\n"
+    );
+    const evalPath = path.join(rootDir, ".aiwiki", "evals", "reflect-cases.jsonl");
+    const initialEvals = await readFile(evalPath, "utf8");
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      readOnly: true
+    });
+
+    expect(result.markdown).toContain("# Reflect Preview");
+    expect(await readFile(evalPath, "utf8")).toBe(initialEvals);
+  });
+
+  it("rejects read-only reflection previews that request output plans", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Auth rule\n\nAuth routes must check permissions server-side.\n"
+    );
+
+    await expect(
+      generateReflectPreview(rootDir, {
+        notes: "notes/today.md",
+        readOnly: true,
+        outputPlan: ".aiwiki/context-packs/reflect-plan.json"
+      })
+    ).rejects.toThrow("Cannot use --read-only with --output-plan");
+
+    await expect(
+      readFile(
+        path.join(rootDir, ".aiwiki", "context-packs", "reflect-plan.json"),
+        "utf8"
+      )
+    ).rejects.toThrow();
+  });
+
   it("rejects output plan paths outside the project root", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

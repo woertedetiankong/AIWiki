@@ -135,6 +135,7 @@ program
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .option("--with-graphify", "Include graphify-out structural context when available", false)
   .option("--architecture-guard", "Include explicit architecture guard signals", false)
+  .option("--read-only", "Do not write logs, evals, or output files", false)
   .action(
     async (
       task: string,
@@ -145,6 +146,7 @@ program
         format?: string;
         withGraphify?: boolean;
         architectureGuard?: boolean;
+        readOnly?: boolean;
       }
     ) => {
       const format = parseOutputFormat(options.format);
@@ -154,7 +156,8 @@ program
         force: options.force,
         format,
         withGraphify: options.withGraphify,
-        architectureGuard: options.architectureGuard
+        architectureGuard: options.architectureGuard,
+        readOnly: options.readOnly
       });
 
       if (result.outputPath) {
@@ -326,6 +329,7 @@ program
   .option("--output-plan <path>", "Write the update plan draft to a project-local JSON file")
   .option("--force", "Overwrite the output plan if it already exists", false)
   .option("--format <format>", "Output format: markdown or json", "markdown")
+  .option("--read-only", "Do not write evals or output plan files", false)
   .action(
     async (
       options: {
@@ -335,6 +339,7 @@ program
         outputPlan?: string;
         force?: boolean;
         format?: string;
+        readOnly?: boolean;
       }
     ) => {
       const format = parseOutputFormat(options.format);
@@ -343,7 +348,8 @@ program
         notes: options.notes,
         limit: parsePositiveInteger(options.limit),
         outputPlan: options.outputPlan,
-        force: options.force
+        force: options.force,
+        readOnly: options.readOnly
       });
 
       process.stdout.write(format === "json" ? result.json : result.markdown);
@@ -600,14 +606,16 @@ program
   .argument("[id]", "Task id")
   .option("--output <path>", "Write resume brief to a project-local path")
   .option("--format <format>", "Output format: markdown or json", "markdown")
+  .option("--read-only", "Do not write or refresh resume files", false)
   .action(
     async (
       id: string | undefined,
-      options: { output?: string; format?: string }
+      options: { output?: string; format?: string; readOnly?: boolean }
     ) => {
       const format = parseOutputFormat(options.format);
       const result = await resumeTask(process.cwd(), id, {
-        output: options.output
+        output: options.output,
+        readOnly: options.readOnly
       });
 
       if (options.output && format === "markdown") {

@@ -64,6 +64,16 @@ aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.
 aiwiki apply .aiwiki/context-packs/reflect-plan.json
 ```
 
+When Codex only needs context and should not write runtime logs, eval cases,
+task resume files, or output plans, use the pure read-only variant:
+
+```bash
+aiwiki brief "implement the next feature" --read-only
+aiwiki guard src/path/to/file.ts
+aiwiki resume --read-only
+aiwiki reflect --from-git-diff --read-only
+```
+
 `brief` and `guard` are safe to run before initialization. In that cold-start mode they perform a read-only project scan, print setup guidance, and do not create `.aiwiki/` files. Run `aiwiki init --project-name <name>` and `aiwiki map --write` when the project is ready to keep durable local memory.
 
 Project scans combine AIWiki's built-in generated/dependency ignores, the repository `.gitignore`, and `.aiwiki/config.json` `ignore` rules. Later rules can use `!path` to re-include a file, so project owners can tune noisy or unusual repositories without changing AIWiki code.
@@ -77,11 +87,11 @@ Most Codex sessions should only need `brief`, `guard`, `checkpoint`, `resume`, a
 ```bash
 aiwiki init [--project-name <name>] [--force]
 aiwiki search "<query>" [--type <type>] [--limit <n>] [--format markdown|json]
-aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force] [--with-graphify] [--architecture-guard] [--format markdown|json]
+aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force] [--with-graphify] [--architecture-guard] [--read-only] [--format markdown|json]
 aiwiki guard <file> [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
 aiwiki map [--write] [--force] [--format markdown|json]
 aiwiki architecture audit [--format markdown|json]
-aiwiki reflect [--from-git-diff] [--notes <path>] [--limit <n>] [--output-plan <path>] [--force] [--format markdown|json]
+aiwiki reflect [--from-git-diff] [--notes <path>] [--limit <n>] [--output-plan <path>] [--force] [--read-only] [--format markdown|json]
 aiwiki ingest <file> [--force] [--limit <n>] [--output-plan <path>] [--format markdown|json]
 aiwiki apply <plan.json> [--confirm] [--no-graph] [--format markdown|json]
 aiwiki lint [--format markdown|json]
@@ -98,7 +108,7 @@ aiwiki task list [--status in_progress|done|paused|cancelled] [--recent <n>] [--
 aiwiki task status [id] [--format markdown|json]
 aiwiki task close [--status done|paused|cancelled] [--format markdown|json]
 aiwiki checkpoint [--message <message>] [--step <step>] [--status <status>] [--tests <tests>] [--next <next>] [--from-git-diff] [--format markdown|json]
-aiwiki resume [id] [--output <path>] [--format markdown|json]
+aiwiki resume [id] [--output <path>] [--read-only] [--format markdown|json]
 aiwiki decision "<decision>" [--module <module>] [--format markdown|json]
 aiwiki blocker "<blocker>" [--severity low|medium|high|critical] [--format markdown|json]
 ```

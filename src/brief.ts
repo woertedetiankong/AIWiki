@@ -34,6 +34,7 @@ export interface BriefOptions {
   format?: OutputFormat;
   withGraphify?: boolean;
   architectureGuard?: boolean;
+  readOnly?: boolean;
 }
 
 export interface BriefSection {
@@ -905,6 +906,10 @@ export async function generateDevelopmentBrief(
   task: string,
   options: BriefOptions = {}
 ): Promise<BriefResult> {
+  if (options.readOnly && options.output) {
+    throw new Error("Cannot use --read-only with --output because --output writes a file.");
+  }
+
   let initialized = true;
   let config: AIWikiConfig;
   try {
@@ -1105,7 +1110,7 @@ export async function generateDevelopmentBrief(
     ? await writeOutputFile(rootDir, options.output, content, options.force ?? false)
     : undefined;
 
-  if (initialized) {
+  if (initialized && !options.readOnly) {
     await appendLogEntry(rootDir, {
       action: "brief",
       title: task,

@@ -18,6 +18,7 @@ export interface ReflectOptions {
   limit?: number;
   outputPlan?: string;
   force?: boolean;
+  readOnly?: boolean;
 }
 
 export interface ReflectSection {
@@ -568,6 +569,10 @@ export async function generateReflectPreview(
   rootDir: string,
   options: ReflectOptions = {}
 ): Promise<ReflectResult> {
+  if (options.readOnly && options.outputPlan) {
+    throw new Error("Cannot use --read-only with --output-plan because --output-plan writes a file.");
+  }
+
   const config = await loadAIWikiConfig(rootDir);
   const notes = await readNotes(rootDir, options.notes);
   const diff = options.fromGitDiff ? await readGitDiff(rootDir) : "";
@@ -694,7 +699,9 @@ export async function generateReflectPreview(
     );
   }
 
-  await appendReflectEvalCase(rootDir, preview);
+  if (!options.readOnly) {
+    await appendReflectEvalCase(rootDir, preview);
+  }
 
   const markdown = formatReflectPreviewMarkdown(preview);
   const json = reflectToJson(preview);
