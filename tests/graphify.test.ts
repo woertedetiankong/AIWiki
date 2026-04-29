@@ -194,7 +194,7 @@ describe("Graphify adapter", () => {
     const brief = await generateDevelopmentBrief(rootDir, "fix stripe webhook", {
       withGraphify: true
     });
-    expect(brief.markdown).toContain("## Graphify Structural Context");
+    expect(brief.markdown).toContain("## Graphify Context");
     expect(brief.markdown).toContain("Graphify file reference: src/app/api/stripe/webhook/route.ts.");
 
     const guard = await generateFileGuardrails(
@@ -202,7 +202,7 @@ describe("Graphify adapter", () => {
       "src/app/api/stripe/webhook/route.ts",
       { withGraphify: true }
     );
-    expect(guard.markdown).toContain("## Graphify Structural Context");
+    expect(guard.markdown).toContain("## Graphify Context");
     expect(guard.markdown).toContain("Related relation:");
   });
 

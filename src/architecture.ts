@@ -83,9 +83,15 @@ function matchesPattern(relativePath: string, pattern: string): boolean {
     return normalizedPath.startsWith(prefix) || basename.startsWith(prefix);
   }
 
+  if (normalizedPattern.startsWith("*")) {
+    const suffix = normalizedPattern.slice(1);
+    return normalizedPath.endsWith(suffix) || basename.endsWith(suffix);
+  }
+
   return (
     normalizedPath === normalizedPattern ||
     normalizedPath.startsWith(`${normalizedPattern}/`) ||
+    normalizedPath.includes(`/${normalizedPattern}/`) ||
     pathSegments(normalizedPath).includes(normalizedPattern)
   );
 }

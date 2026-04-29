@@ -8,6 +8,45 @@ which describes the current implemented CLI contract.
 Future work in this document MUST remain optional, additive, local-first by default, preview-first
 for durable memory writes, and covered by tests before it moves into `SPEC.md`.
 
+## Near-Term Hardening Before Future Adapters
+
+The next implementation phase should improve the current CLI before adding large optional systems
+such as code-context, semantic indexing, prompt optimization, or deep-context.
+
+### Codex Usability Pass
+
+Goal: make AIWiki outputs immediately useful to Codex during normal coding work.
+
+Requirements:
+
+- `brief`, `guard`, `resume`, and `module brief` SHOULD put the highest-signal actions first.
+- Markdown output SHOULD avoid product explanation and long background sections.
+- Markdown output SHOULD distinguish:
+  - `Must Read`
+  - `Do Not`
+  - `Rules`
+  - `Pitfalls`
+  - `Suggested Tests`
+  - `Staleness Warnings` when applicable
+- Common `brief` and `guard` outputs SHOULD fit in roughly one to one-and-a-half terminal screens.
+- JSON output MAY remain more complete than Markdown output.
+- Empty and unknown states MUST remain stable, short, and tested.
+- Tests SHOULD pin section order and representative concise output.
+
+### Freshness / Staleness Pass
+
+Goal: make stale wiki memory visible before it misleads a coding agent.
+
+Planned behavior:
+
+- `aiwiki lint` SHOULD warn when wiki frontmatter `files` entries point to missing project files.
+- `aiwiki lint` SHOULD warn when referenced files changed after a wiki page's `last_updated` value.
+- `aiwiki brief` and `aiwiki guard` SHOULD include compact staleness warnings for selected memory.
+- `aiwiki reflect --from-git-diff` SHOULD map changed files back to related wiki pages and suggest
+  append/update plan entries when those pages may need refresh.
+- Staleness warnings MUST be advisory and MUST NOT block normal command output.
+- All checks MUST stay local and MUST NOT require semantic indexing or remote services.
+
 ## 1. Promotion Rules
 
 A future capability may move from this document into `SPEC.md` only when:

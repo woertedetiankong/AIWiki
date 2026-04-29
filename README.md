@@ -93,6 +93,12 @@ Product and implementation documents:
 - `CHANGELOG.md`: milestone summary and verification history.
 - `docs/archive/`: full historical PRD, milestone implementation records, and background material.
 
+Next development focus:
+
+- First improve current CLI usability for Codex: concise `brief`, `guard`, `resume`, `reflect`, and `module brief` output.
+- Then add freshness / staleness checks so `.aiwiki/wiki/` memory does not silently drift away from code.
+- Treat larger items in `SPEC-FUTURE.md` as backlog until the current CLI feels fast, short, and trustworthy.
+
 ## Verify
 
 ```bash

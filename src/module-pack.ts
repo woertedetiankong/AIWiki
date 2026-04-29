@@ -419,6 +419,17 @@ function moduleLintToJson(report: ModuleLintReport): string {
   return `${JSON.stringify(report, null, 2)}\n`;
 }
 
+function moduleBriefSectionItems(
+  brief: ModuleMemoryBrief,
+  title: string
+): string[] {
+  return brief.sections.find((section) => section.title === title)?.items ?? [];
+}
+
+function conciseItems(items: string[], fallback: string): string[] {
+  return items.length > 0 ? items : [fallback];
+}
+
 function pageList(pages: ModuleMemoryPage[], type: ModuleMemoryPage["type"]): string[] {
   return pages
     .filter((page) => page.type === type)
@@ -426,14 +437,52 @@ function pageList(pages: ModuleMemoryPage[], type: ModuleMemoryPage["type"]): st
 }
 
 function formatModuleMemoryBriefMarkdown(brief: ModuleMemoryBrief): string {
-  const sections = brief.sections
+  const sourceFiles = moduleBriefSectionItems(brief, "Source Files To Inspect");
+  const modulePages = moduleBriefSectionItems(brief, "Module Pages");
+  const rules = moduleBriefSectionItems(brief, "Rules");
+  const pitfalls = moduleBriefSectionItems(brief, "Pitfalls");
+  const decisions = moduleBriefSectionItems(brief, "Decisions");
+  const patterns = moduleBriefSectionItems(brief, "Patterns");
+  const guidance = moduleBriefSectionItems(brief, "Portability Guidance");
+  const tests = guidance.filter((item) =>
+    /test|check|acceptance|verification/iu.test(item)
+  );
+  const sections = [
+    {
+      title: "Must Read",
+      items: [
+        `Task: ${brief.task}`,
+        ...(brief.pages.length === 0
+          ? ["No module memory matched this module."]
+          : []),
+        ...sourceFiles,
+        ...modulePages
+      ]
+    },
+    {
+      title: "Porting Rules",
+      items: [...moduleBriefSectionItems(brief, "Porting Mode"), ...rules]
+    },
+    {
+      title: "Pitfalls",
+      items: pitfalls
+    },
+    {
+      title: "Configuration and Boundary Notes",
+      items: [...decisions, ...patterns, ...guidance]
+    },
+    {
+      title: "Suggested Tests",
+      items: conciseItems(
+        tests,
+        "Add focused tests for the adapted module behavior, configuration boundaries, and known pitfalls."
+      )
+    }
+  ]
     .map((section) => `## ${section.title}\n${formatList(section.items, "None found.")}`)
     .join("\n\n");
 
   return `# Module Brief: ${brief.module}
-
-## Task
-- ${brief.task}
 
 ${sections}
 `;

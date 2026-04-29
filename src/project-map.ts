@@ -66,9 +66,15 @@ function matchesPattern(relativePath: string, pattern: string): boolean {
     return normalizedPath.startsWith(prefix) || basename.startsWith(prefix);
   }
 
+  if (normalizedPattern.startsWith("*")) {
+    const suffix = normalizedPattern.slice(1);
+    return normalizedPath.endsWith(suffix) || basename.endsWith(suffix);
+  }
+
   return (
     normalizedPath === normalizedPattern ||
     normalizedPath.startsWith(`${normalizedPattern}/`) ||
+    normalizedPath.includes(`/${normalizedPattern}/`) ||
     pathSegments(normalizedPath).includes(normalizedPattern)
   );
 }
@@ -135,6 +141,9 @@ function detectStack(files: string[], packageJson: PackageJson | undefined): str
   if (packageJson) {
     stack.push("Node.js");
   }
+  if (files.some((file) => path.posix.basename(file) === "pom.xml")) {
+    stack.push("Java", "Maven");
+  }
   if (files.includes("tsconfig.json") || hasDependency(packageJson, "typescript")) {
     stack.push("TypeScript");
   }
@@ -155,6 +164,15 @@ function detectStack(files: string[], packageJson: PackageJson | undefined): str
   }
   if (hasDependency(packageJson, "react")) {
     stack.push("React");
+  }
+  if (
+    files.some((file) => file.endsWith(".vue")) ||
+    hasDependency(packageJson, "vue")
+  ) {
+    stack.push("Vue");
+  }
+  if (files.some((file) => file.includes("uni_modules/") || file.endsWith("manifest.json"))) {
+    stack.push("uni-app");
   }
 
   return unique(stack);

@@ -92,6 +92,15 @@ describe("AIWiki task continuity", () => {
 
     const resume = await resumeTask(rootDir);
     expect(resume.markdown).toContain("# Resume Brief for Codex");
+    expect(resume.markdown).toContain("## Continue From Here");
+    expect(resume.markdown).toContain("## Next Steps");
+    expect(resume.markdown).toContain("## Current Status");
+    expect(resume.markdown.indexOf("## Continue From Here")).toBeLessThan(
+      resume.markdown.indexOf("## Next Steps")
+    );
+    expect(resume.markdown.indexOf("## Next Steps")).toBeLessThan(
+      resume.markdown.indexOf("## Current Status")
+    );
     expect(resume.markdown).toContain("Finished task start");
     expect(resume.markdown).toContain("Implement resume");
   });

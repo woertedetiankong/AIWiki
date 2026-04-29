@@ -375,10 +375,17 @@ describe("module packs", () => {
     );
 
     expect(result.markdown).toContain("# Module Brief: payment");
+    expect(result.markdown).toContain("## Must Read");
+    expect(result.markdown).toContain("## Porting Rules");
+    expect(result.markdown).toContain("## Pitfalls");
+    expect(result.markdown).toContain("## Configuration and Boundary Notes");
+    expect(result.markdown).toContain("## Suggested Tests");
+    expect(result.markdown.indexOf("## Must Read")).toBeLessThan(
+      result.markdown.indexOf("## Porting Rules")
+    );
     expect(result.markdown).toContain("Do not copy source code directly");
     expect(result.markdown).toContain("Stripe raw body");
     expect(result.markdown).toContain("Keep payment secrets server-side");
-    expect(result.markdown).toContain("Portability Guidance");
     expect(result.brief.files).toContain("src/app/api/stripe/webhook/route.ts");
 
     const parsed = JSON.parse(result.json) as {
@@ -427,7 +434,7 @@ describe("module packs", () => {
     const lint = await lintModuleMemory(rootDir, "billing");
 
     expect(brief.brief.pages).toEqual([]);
-    expect(brief.markdown).toContain("None found.");
+    expect(brief.markdown).toContain("No module memory matched this module.");
     expect(lint.report.issues).toContainEqual(
       expect.objectContaining({ code: "no_module_memory" })
     );

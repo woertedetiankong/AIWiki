@@ -173,19 +173,70 @@ See `README.md` for command usage and `SPEC.md` for exact behavior.
 
 Near-term:
 
+- Codex usability pass for the existing CLI.
+- Freshness / staleness checks so wiki memory does not silently drift away from code.
 - `aiwiki lint --fix` for low-risk index/backlink/format repair.
 - Graph hotspots and conflicts using the existing graph model.
 - Retrieval feedback and tuning for brief, guard, reflect, and module workflows.
-- PRD checklist support for task continuity.
-- Confirmed module import workflow after write semantics are fully specified.
 
 Later:
 
+- PRD checklist support for task continuity.
+- Confirmed module import workflow after write semantics are fully specified.
 - Optional code context adapter.
 - Optional semantic memory index.
 - Optional prompt/workflow optimizer.
 - Optional deep-context / recursive investigation.
 - MCP server after the local Markdown workflow remains stable.
+
+## Next Session Focus
+
+The next development session should not start with large systems from
+`SPEC-FUTURE.md`. First make the current CLI more useful to Codex and safer
+against stale memory.
+
+### 1. Codex Usability Pass
+
+Goal: make Codex want to run AIWiki because it is faster and clearer than
+manually searching the repo.
+
+Focus commands:
+
+- `aiwiki brief "<task>"`
+- `aiwiki guard <file>`
+- `aiwiki resume`
+- `aiwiki reflect --from-git-diff --output-plan <path>`
+- `aiwiki module brief <module> "<task>"`
+
+Acceptance criteria:
+
+- Markdown output starts with the most useful actions, not product explanation.
+- `brief` and `guard` fit in roughly one to one-and-a-half terminal screens for
+  common cases.
+- Outputs clearly separate `Must Read`, `Do Not`, `Rules`, `Pitfalls`, and
+  `Suggested Tests`.
+- JSON output can remain complete, but Markdown output should be optimized for
+  agent decision-making.
+- Unknown or empty states stay stable and short.
+- Tests pin the new section order and empty-state behavior.
+
+### 2. Freshness / Staleness Pass
+
+Goal: make stale project memory visible before it misleads Codex.
+
+Minimum useful checks:
+
+- `aiwiki lint` reports wiki frontmatter `files` entries that no longer exist.
+- `aiwiki lint` reports wiki pages whose referenced files changed after the
+  page `last_updated` value.
+- `brief` and `guard` display a compact `Staleness Warnings` section when
+  relevant memory may be outdated.
+- `reflect --from-git-diff` finds wiki pages related to changed files and
+  suggests updating them in the output plan draft.
+- Staleness warnings are advisory and must not block the user's task.
+
+A future version may add richer lifecycle metadata, but the first pass should be
+simple, local, tested, and based on existing Markdown plus git data.
 
 ## Success Criteria
 

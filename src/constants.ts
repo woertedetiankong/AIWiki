@@ -38,7 +38,23 @@ export const DEFAULT_IGNORE = [
   ".git",
   "dist",
   "build",
-  ".next"
+  ".next",
+  ".wrangler",
+  ".history",
+  ".opensource-explorer",
+  ".codex",
+  ".idea",
+  ".vscode",
+  ".ai/chrome-debug-profile",
+  ".turbo",
+  ".vercel",
+  "target",
+  "out",
+  "uni_modules",
+  "public/static",
+  "static/js",
+  "tsconfig.tsbuildinfo",
+  "*.zip"
 ] as const;
 
 export const AIWIKI_DIRECTORIES = [
@@ -83,17 +99,43 @@ export const PROJECT_SCAN_EXCLUDED_PATHS = [
   "dist",
   "build",
   ".next",
-  "coverage"
+  ".wrangler",
+  ".history",
+  ".opensource-explorer",
+  ".codex",
+  ".idea",
+  ".vscode",
+  ".ai/chrome-debug-profile",
+  ".turbo",
+  ".vercel",
+  "target",
+  "out",
+  "uni_modules",
+  "public/static",
+  "static/js",
+  "coverage",
+  "tsconfig.tsbuildinfo",
+  "*.zip"
 ] as const;
 
 export const GENERATED_FILE_CANDIDATES = [
   "dist",
   "build",
   ".next",
+  ".wrangler",
+  ".turbo",
+  ".vercel",
+  "target",
+  "out",
+  "uni_modules",
+  "public/static",
+  "static/js",
   "coverage",
   "package-lock.json",
   "pnpm-lock.yaml",
-  "yarn.lock"
+  "yarn.lock",
+  "tsconfig.tsbuildinfo",
+  "*.zip"
 ] as const;
 
 export const IMPORTANT_DIRECTORY_CANDIDATES = [
@@ -106,6 +148,8 @@ export const IMPORTANT_DIRECTORY_CANDIDATES = [
   "api",
   "tests",
   "test",
+  "docs",
+  "tools",
   "prisma",
   "db",
   "supabase",
@@ -137,7 +181,23 @@ export const ARCHITECTURE_SCAN_EXCLUDED_PATHS = [
   "dist",
   "build",
   ".next",
-  "coverage"
+  ".wrangler",
+  ".history",
+  ".opensource-explorer",
+  ".codex",
+  ".idea",
+  ".vscode",
+  ".ai/chrome-debug-profile",
+  ".turbo",
+  ".vercel",
+  "target",
+  "out",
+  "uni_modules",
+  "public/static",
+  "static/js",
+  "coverage",
+  "tsconfig.tsbuildinfo",
+  "*.zip"
 ] as const;
 
 export const ARCHITECTURE_SOURCE_FILE_EXTENSIONS = [
@@ -157,7 +217,9 @@ export const ARCHITECTURE_SOURCE_FILE_EXTENSIONS = [
   ".kt",
   ".swift",
   ".php",
-  ".cs"
+  ".cs",
+  ".vue",
+  ".xml"
 ] as const;
 
 export const ARCHITECTURE_HARDCODING_TOPICS = [

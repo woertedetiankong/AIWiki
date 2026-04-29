@@ -371,22 +371,57 @@ function formatSection(value: ReflectSection): string {
   return `## ${value.title}\n${value.items.map((item) => `- ${item}`).join("\n")}`;
 }
 
+function reflectSectionItems(preview: ReflectPreview, title: string): string[] {
+  return preview.sections.find((section) => section.title === title)?.items ?? [];
+}
+
 export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
   const draftLine = preview.updatePlanDraft
     ? preview.outputPlanPath
       ? `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Saved to ${preview.outputPlanPath}. Run \`aiwiki apply ${preview.outputPlanPath}\`, then \`aiwiki apply ${preview.outputPlanPath} --confirm\` after review.`
       : `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Save with \`--output-plan <path>\` or save the JSON output, then run \`aiwiki apply <plan.json>\` before \`--confirm\`.`
     : "- No update plan draft was generated.";
+  const changedFiles = preview.changedFiles.length > 0
+    ? preview.changedFiles
+    : ["No changed files detected."];
+  const sections: ReflectSection[] = [
+    {
+      title: "Review First",
+      items: reflectSectionItems(preview, "Task Summary")
+    },
+    {
+      title: "Update Plan Draft",
+      items: [draftLine.replace(/^- /u, "")]
+    },
+    {
+      title: "Changed Files",
+      items: changedFiles
+    },
+    {
+      title: "Lessons to Capture",
+      items: [
+        ...reflectSectionItems(preview, "New Lessons"),
+        ...reflectSectionItems(preview, "Pitfalls to Add or Update"),
+        ...reflectSectionItems(preview, "Modules to Update"),
+        ...reflectSectionItems(preview, "Decisions to Add or Deprecate"),
+        ...reflectSectionItems(preview, "Patterns to Add or Update"),
+        ...reflectSectionItems(preview, "Rules to Promote")
+      ]
+    },
+    {
+      title: "Apply Safely",
+      items: [
+        ...reflectSectionItems(preview, "Files Changed in .aiwiki"),
+        ...reflectSectionItems(preview, "Confirmed Apply Workflow"),
+        "This preview does not write structured wiki pages.",
+        "Review and confirm reusable lessons before adding pitfalls, modules, decisions, patterns, or rules."
+      ]
+    }
+  ];
   return [
     "# Reflect Preview",
     "",
-    ...preview.sections.flatMap((value) => [formatSection(value), ""]),
-    "## Update Plan Draft",
-    draftLine,
-    "",
-    "## Safety",
-    "- This preview does not write structured wiki pages.",
-    "- Review and confirm reusable lessons before adding pitfalls, modules, decisions, patterns, or rules."
+    ...sections.flatMap((value) => [formatSection(value), ""])
   ].join("\n").trimEnd() + "\n";
 }
 

@@ -294,11 +294,84 @@ function formatSection(section: FileGuardrailSection): string {
   return `## ${section.title}\n${section.items.map((item) => `- ${item}`).join("\n")}`;
 }
 
+function sectionItems(
+  guardrails: FileGuardrails,
+  title: string
+): string[] {
+  return guardrails.sections.find((section) => section.title === title)?.items ?? [];
+}
+
+function stableItems(items: string[], fallback: string): string[] {
+  return items.length > 0 ? items : [fallback];
+}
+
+function withoutFallback(items: string[], fallback: string): string[] {
+  return items.filter((item) => item !== fallback);
+}
+
 export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string {
+  const architectureGuard = sectionItems(guardrails, "Architecture Guard");
+  const graphify = sectionItems(guardrails, "Graphify Structural Context");
+  const relatedModules = sectionItems(guardrails, "Related Modules").filter(
+    (item) => item !== "No related module pages found."
+  );
+  const rules = withoutFallback(
+    sectionItems(guardrails, "Critical Rules"),
+    "No matching rule pages found."
+  );
+  const pitfalls = withoutFallback(
+    sectionItems(guardrails, "Known Pitfalls"),
+    "No matching pitfall pages found."
+  );
+  const decisions = withoutFallback(
+    sectionItems(guardrails, "Related Decisions"),
+    "No matching decision pages found."
+  );
+  const sections: FileGuardrailSection[] = [
+    {
+      title: "Do Not",
+      items: [
+        `Do not edit ${guardrails.filePath} before reviewing matched rules and pitfalls.`,
+        "Do not overwrite user-owned AIWiki notes while applying fixes.",
+        "Do not promote new rules from this edit without user confirmation."
+      ]
+    },
+    {
+      title: "Rules",
+      items: stableItems(rules, "No matching rules found.")
+    },
+    {
+      title: "Pitfalls",
+      items: stableItems(pitfalls, "No matching pitfalls found.")
+    },
+    {
+      title: "Required Checks",
+      items: stableItems(sectionItems(guardrails, "Required Checks"), "Run relevant project checks after editing.")
+    },
+    {
+      title: "Suggested Tests",
+      items: stableItems(sectionItems(guardrails, "Suggested Tests"), "Run relevant project tests.")
+    },
+    {
+      title: "Related Decisions",
+      items: stableItems(decisions, "No matching decisions found.")
+    },
+    ...(architectureGuard.length > 0
+      ? [{ title: "Architecture Guard", items: architectureGuard }]
+      : []),
+    ...(graphify.length > 0
+      ? [{ title: "Graphify Context", items: graphify }]
+      : []),
+    {
+      title: "Other Context",
+      items: stableItems(relatedModules, "No related modules found.")
+    }
+  ];
+
   return [
     `# File Guardrails: ${guardrails.filePath}`,
     "",
-    ...guardrails.sections.flatMap((section) => [formatSection(section), ""]),
+    ...sections.flatMap((section) => [formatSection(section), ""]),
     `Suggested file note: ${guardrails.suggestedFileNote}`
   ].join("\n").trimEnd() + "\n";
 }

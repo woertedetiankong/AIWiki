@@ -75,12 +75,23 @@ describe("generateDevelopmentBrief", () => {
     const result = await generateDevelopmentBrief(rootDir, "stripe webhook");
 
     expect(result.markdown).toContain("# Development Brief: stripe webhook");
-    expect(result.markdown).toContain("## Known Pitfalls");
+    expect(result.markdown).toContain("## Must Read");
+    expect(result.markdown).toContain("## Do Not");
+    expect(result.markdown).toContain("## Rules");
+    expect(result.markdown).toContain("## Pitfalls");
+    expect(result.markdown).toContain("## Suggested Tests");
+    expect(result.markdown.indexOf("## Must Read")).toBeLessThan(
+      result.markdown.indexOf("## Do Not")
+    );
+    expect(result.markdown.indexOf("## Do Not")).toBeLessThan(
+      result.markdown.indexOf("## Rules")
+    );
+    expect(result.markdown.indexOf("## Rules")).toBeLessThan(
+      result.markdown.indexOf("## Pitfalls")
+    );
     expect(result.markdown).toContain("Stripe webhook raw body");
     expect(result.markdown).toContain("Keep Stripe secrets server-side");
-    expect(result.markdown).toContain(
-      "Create your own implementation plan before editing code."
-    );
+    expect(result.markdown).toContain("Do not treat this brief as exact code instructions.");
     expect(result.markdown).not.toContain("Step 1");
     expect(result.markdown).not.toContain("Edit ");
 
@@ -113,10 +124,7 @@ describe("generateDevelopmentBrief", () => {
       "add stripe payment provider webhook"
     );
 
-    expect(result.markdown).toContain("## Architecture Boundaries");
-    expect(result.markdown).toContain("## Hardcoding and Configuration Risks");
-    expect(result.markdown).toContain("## Portability Checklist");
-    expect(result.markdown).toContain("## Module Memory to Maintain");
+    expect(result.markdown).toContain("## Other Context");
     expect(result.markdown).toContain("payment");
     expect(result.markdown).toContain("provider");
     expect(result.markdown).toContain("webhook");
@@ -145,6 +153,90 @@ describe("generateDevelopmentBrief", () => {
     expect(sectionTitles).toContain("Module Memory to Maintain");
     expect(result.markdown).toContain("No large-file structure warnings detected.");
     expect(result.markdown).toContain("Record reusable module decisions after implementation.");
+  });
+
+  it("discovers task-matching source entry files for cold-start projects", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "components"), { recursive: true });
+    await mkdir(path.join(rootDir, "lib"), { recursive: true });
+    await mkdir(path.join(rootDir, ".wrangler", "tmp"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "components", "NovelEditor.tsx"),
+      "export function NovelEditor() { return 'editor'; }\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "lib", "appearance.ts"),
+      "export const THEME_OPTIONS = ['default', 'editorial'];\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, ".wrangler", "tmp", "ProxyServerWorker.js"),
+      "export const generated = 'editor theme';\n",
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "check whether editor supports different styles"
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const discovered = parsed.sections.find(
+      (section) => section.title === "Discovered Entry Files"
+    );
+
+    expect(discovered?.items.join("\n")).toContain("components/NovelEditor.tsx");
+    expect(discovered?.items.join("\n")).toContain("lib/appearance.ts");
+    expect(discovered?.items.join("\n")).not.toContain(".wrangler");
+    expect(result.markdown).toContain("components/NovelEditor.tsx");
+  });
+
+  it("discovers task-matching markdown docs for document cleanup tasks", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "docs"), { recursive: true });
+    await mkdir(path.join(rootDir, ".history"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "requirements.md"),
+      "# Requirements\n\nCurrent PMS requirements and handoff notes.\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "docs", "deployment-checklist.md"),
+      "# Deployment Checklist\n\nCurrent deployment verification docs.\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, ".history", "requirements_20260401.md"),
+      "# Old Requirements\n\nStale copy.\n",
+      "utf8"
+    );
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "src", "DocumentController.ts"),
+      "export const documentController = true;\n",
+      "utf8"
+    );
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "梳理 Markdown 文档，判断 requirements 和 checklist 是否过时"
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const docs = parsed.sections.find(
+      (section) => section.title === "Discovered Markdown Docs"
+    );
+
+    expect(docs?.items.join("\n")).toContain("requirements.md");
+    expect(docs?.items.join("\n")).toContain("docs/deployment-checklist.md");
+    expect(docs?.items.join("\n")).not.toContain(".history");
+    expect(result.markdown).not.toContain("src/DocumentController.ts");
+    expect(result.markdown).toContain("requirements.md");
   });
 
   it("adds an explicit architecture guard section when requested", async () => {

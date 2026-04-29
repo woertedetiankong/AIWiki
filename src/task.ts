@@ -441,44 +441,52 @@ function excerptList(markdown: string, heading: string): string[] {
   return items;
 }
 
+function bulletItems(markdown: string): string[] {
+  return markdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.replace(/^- /u, ""))
+    .filter(
+      (line) =>
+        !line.startsWith("No ") &&
+        line !== "None recorded." &&
+        line !== "None yet."
+    );
+}
+
 function resumeMarkdown(status: TaskStatusData): string {
   const completed = excerptList(status.progress, "Completed");
   const inProgress = excerptList(status.progress, "In Progress");
   const notStarted = excerptList(status.progress, "Not Started");
   const next = excerptList(status.progress, "Next Recommended Steps");
-  const changed = status.changedFiles
-    .split("\n")
-    .filter((line) => line.trim().startsWith("- "))
-    .map((line) => line.trim().replace(/^- /u, ""))
-    .filter((line) => !line.startsWith("No changed files"));
-  const tests = status.tests
-    .split("\n")
-    .filter((line) => line.trim().startsWith("- "))
-    .map((line) => line.trim().replace(/^- /u, ""))
-    .filter((line) => !line.startsWith("No tests"));
+  const changed = bulletItems(status.changedFiles);
+  const tests = bulletItems(status.tests);
+  const decisions = bulletItems(status.decisions);
+  const blockers = bulletItems(status.blockers);
+  const continueFromHere = [
+    next[0] ? `Next: ${next[0]}` : undefined,
+    inProgress[0] ? `In progress: ${inProgress[0]}` : undefined,
+    completed[0] && !next[0] && !inProgress[0]
+      ? `Last completed: ${completed[0]}`
+      : undefined
+  ].filter((item): item is string => Boolean(item));
 
   return `# Resume Brief for Codex
 
-## Task
-${status.metadata.title}
+## Continue From Here
+${bulletList(continueFromHere, "No next step recorded. Inspect the current git diff before editing.")}
 
-## Task ID
-${status.metadata.id}
+## Next Steps
+${bulletList(next, "No next steps recorded.")}
 
 ## Current Status
-${status.metadata.status}
-
-## Completed
-${bulletList(completed, "No completed work recorded.")}
-
-## In Progress
-${bulletList(inProgress, "No in-progress work recorded.")}
-
-## Not Yet Done
-${bulletList(notStarted, "No not-started items recorded.")}
-
-## Important Decisions
-${status.decisions.trim() || "- None recorded."}
+- Task: ${status.metadata.title}
+- Task ID: ${status.metadata.id}
+- Status: ${status.metadata.status}
+- Completed: ${completed.length > 0 ? completed.join("; ") : "No completed work recorded."}
+- In Progress: ${inProgress.length > 0 ? inProgress.join("; ") : "No in-progress work recorded."}
+- Not Yet Done: ${notStarted.length > 0 ? notStarted.join("; ") : "No not-started items recorded."}
 
 ## Changed Files
 ${bulletList(changed, "No changed files recorded.")}
@@ -486,14 +494,17 @@ ${bulletList(changed, "No changed files recorded.")}
 ## Tests
 ${bulletList(tests, "No tests recorded.")}
 
-## Known Issues
-${status.blockers.trim() || "- None recorded."}
+## Decisions
+${bulletList(decisions, "None recorded.")}
 
-## Next Recommended Steps
-${bulletList(next, "No next steps recorded.")}
+## Blockers
+${bulletList(blockers, "None recorded.")}
 
-## Instructions for Codex
-Use this resume brief as the source of truth for the current task state. Do not restart from scratch. First inspect the changed files and current git diff, then continue from the Next Recommended Steps. If you find a mismatch between this resume brief and the actual repository state, report it before editing code.
+## Codex Instructions
+- Use this resume brief as the source of truth for the current task state.
+- Do not restart from scratch.
+- First inspect the changed files and current git diff.
+- If this brief conflicts with the repository state, report the mismatch before editing.
 `;
 }
 

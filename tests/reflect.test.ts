@@ -85,6 +85,12 @@ describe("generateReflectPreview", () => {
     });
 
     expect(result.markdown).toContain("# Reflect Preview");
+    expect(result.markdown).toContain("## Review First");
+    expect(result.markdown).toContain("## Update Plan Draft");
+    expect(result.markdown).toContain("## Lessons to Capture");
+    expect(result.markdown.indexOf("## Review First")).toBeLessThan(
+      result.markdown.indexOf("## Update Plan Draft")
+    );
     expect(result.markdown).toContain("Notes summary: Auth fix");
     expect(result.markdown).toContain("Auth route permission checks");
     expect(result.markdown).toContain("No structured wiki writes are planned");

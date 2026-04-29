@@ -46,10 +46,19 @@ async function setupProject(rootDir: string): Promise<void> {
   );
   await writeProjectFile(rootDir, "package-lock.json", "{}\n");
   await writeProjectFile(rootDir, "tsconfig.json", "{}\n");
+  await writeProjectFile(rootDir, "pms-frame/pom.xml", "<project />\n");
+  await writeProjectFile(rootDir, "pms-app/pages/home/index.vue", "<template />\n");
   await writeProjectFile(rootDir, "src/cli.ts", "export {};\n");
   await writeProjectFile(rootDir, "tests/cli.test.ts", "export {};\n");
   await writeProjectFile(rootDir, ".env", "SECRET=value\n");
   await writeProjectFile(rootDir, "dist/out.js", "generated\n");
+  await writeProjectFile(rootDir, "pms-frame/target/classes/App.class", "generated\n");
+  await writeProjectFile(rootDir, ".ai/chrome-debug-profile/Default/Network/Trust Tokens", "generated\n");
+  await writeProjectFile(rootDir, ".idea/workspace.xml", "generated\n");
+  await writeProjectFile(rootDir, ".wrangler/tmp/ProxyServerWorker.js", "generated\n");
+  await writeProjectFile(rootDir, ".history/old.ts", "generated\n");
+  await writeProjectFile(rootDir, "archive.zip", "generated\n");
+  await writeProjectFile(rootDir, "tsconfig.tsbuildinfo", "generated\n");
 }
 
 async function updateConfig(
@@ -113,13 +122,20 @@ describe("generateProjectMap", () => {
 
     expect(result.projectMap.stack).toContain("Node.js");
     expect(result.projectMap.stack).toContain("TypeScript");
+    expect(result.projectMap.stack).toContain("Java");
+    expect(result.projectMap.stack).toContain("Maven");
+    expect(result.projectMap.stack).toContain("Vue");
     expect(result.projectMap.stack).toContain("Commander CLI");
     expect(result.projectMap.stack).toContain("Vitest");
-    expect(result.projectMap.importantDirectories).toEqual(["src", "tests"]);
+    expect(result.projectMap.importantDirectories).toEqual(["pages", "src", "tests"]);
     expect(result.projectMap.modules).toContain("CLI");
     expect(result.projectMap.existingRules).toContain("Protect user data");
     expect(result.projectMap.generatedFiles).toContain("package-lock.json");
-    expect(result.projectMap.scannedFiles).toBe(5);
+    expect(result.projectMap.scannedFiles).toBe(7);
+    expect(result.projectMap.generatedFiles).not.toContain(".wrangler/tmp/ProxyServerWorker.js");
+    expect(result.projectMap.generatedFiles).not.toContain("archive.zip");
+    expect(result.projectMap.highRiskFiles.join("\n")).not.toContain("target/classes");
+    expect(result.projectMap.highRiskFiles.join("\n")).not.toContain("chrome-debug-profile");
     expect(result.markdown).toContain("# Project Map: demo");
   });
 

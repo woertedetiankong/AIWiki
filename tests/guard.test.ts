@@ -97,6 +97,17 @@ describe("generateFileGuardrails", () => {
     expect(result.markdown).toContain(
       "# File Guardrails: src/app/api/stripe/webhook/route.ts"
     );
+    expect(result.markdown).toContain("## Do Not");
+    expect(result.markdown).toContain("## Rules");
+    expect(result.markdown).toContain("## Pitfalls");
+    expect(result.markdown).toContain("## Required Checks");
+    expect(result.markdown).toContain("## Suggested Tests");
+    expect(result.markdown.indexOf("## Do Not")).toBeLessThan(
+      result.markdown.indexOf("## Rules")
+    );
+    expect(result.markdown.indexOf("## Rules")).toBeLessThan(
+      result.markdown.indexOf("## Pitfalls")
+    );
     expect(result.markdown).toContain("Payment");
     expect(result.markdown).toContain("Stripe webhook raw body");
     expect(result.markdown).toContain("Keep Stripe secrets server-side");
@@ -129,7 +140,8 @@ describe("generateFileGuardrails", () => {
     const result = await generateFileGuardrails(rootDir, "src/unknown.ts");
 
     expect(result.guardrails.matchedDocs).toEqual([]);
-    expect(result.markdown).toContain("No related module pages found.");
+    expect(result.markdown).toContain("No related modules found.");
+    expect(result.markdown).toContain("No matching rules found.");
     expect(result.markdown).toContain("wiki/files/src-unknown.md");
   });
 

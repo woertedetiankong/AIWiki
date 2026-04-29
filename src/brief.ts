@@ -1,13 +1,18 @@
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { generateArchitectureBriefContext } from "./architecture.js";
-import { BRIEF_EVALS_PATH, INDEX_PATH } from "./constants.js";
+import {
+  ARCHITECTURE_SOURCE_FILE_EXTENSIONS,
+  BRIEF_EVALS_PATH,
+  PROJECT_SCAN_EXCLUDED_PATHS,
+  INDEX_PATH
+} from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
 import { appendLogEntry } from "./log.js";
 import type { OutputFormat } from "./output.js";
-import { resolveProjectPath } from "./paths.js";
+import { resolveProjectPath, toPosixPath } from "./paths.js";
 import type { SearchResult } from "./search.js";
 import { searchWikiMemory } from "./search.js";
 
@@ -42,9 +47,64 @@ export interface BriefResult {
 }
 
 const DEFAULT_BRIEF_LIMIT = 8;
+const DISCOVERED_ENTRY_FILE_LIMIT = 10;
+const DISCOVERY_CONTENT_LIMIT = 12_000;
+const DISCOVERED_DOC_LIMIT = 10;
+
+interface DiscoveredEntryFile {
+  path: string;
+  score: number;
+  matchedTokens: string[];
+}
 
 function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function normalizePath(filePath: string): string {
+  return toPosixPath(filePath).replace(/^\.\//u, "");
+}
+
+function pathSegments(filePath: string): string[] {
+  return normalizePath(filePath).split("/");
+}
+
+function matchesPattern(relativePath: string, pattern: string): boolean {
+  const normalizedPattern = normalizePath(pattern).replace(/\/$/u, "");
+  const normalizedPath = normalizePath(relativePath);
+  const basename = path.posix.basename(normalizedPath);
+
+  if (normalizedPattern.endsWith("*")) {
+    const prefix = normalizedPattern.slice(0, -1);
+    return normalizedPath.startsWith(prefix) || basename.startsWith(prefix);
+  }
+
+  if (normalizedPattern.startsWith("*")) {
+    const suffix = normalizedPattern.slice(1);
+    return normalizedPath.endsWith(suffix) || basename.endsWith(suffix);
+  }
+
+  return (
+    normalizedPath === normalizedPattern ||
+    normalizedPath.startsWith(`${normalizedPattern}/`) ||
+    normalizedPath.includes(`/${normalizedPattern}/`) ||
+    pathSegments(normalizedPath).includes(normalizedPattern)
+  );
+}
+
+function shouldIgnore(relativePath: string, ignorePatterns: readonly string[]): boolean {
+  return ignorePatterns.some((pattern) => matchesPattern(relativePath, pattern));
+}
+
+function isSourceFile(relativePath: string): boolean {
+  const extension = path.posix.extname(normalizePath(relativePath));
+  return ARCHITECTURE_SOURCE_FILE_EXTENSIONS.includes(
+    extension as (typeof ARCHITECTURE_SOURCE_FILE_EXTENSIONS)[number]
+  );
+}
+
+function isMarkdownFile(relativePath: string): boolean {
+  return path.posix.extname(normalizePath(relativePath)).toLowerCase() === ".md";
 }
 
 function pageDocPath(result: SearchResult): string {
@@ -70,6 +130,351 @@ async function readIndexSummary(rootDir: string): Promise<string> {
 
     throw error;
   }
+}
+
+async function walkSourceFiles(
+  rootDir: string,
+  ignorePatterns: readonly string[],
+  currentDir = rootDir
+): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(currentDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = normalizePath(path.relative(rootDir, fullPath));
+
+    if (shouldIgnore(relativePath, ignorePatterns)) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      files.push(...(await walkSourceFiles(rootDir, ignorePatterns, fullPath)));
+    } else if (entry.isFile() && isSourceFile(relativePath)) {
+      files.push(relativePath);
+    }
+  }
+
+  return files.sort();
+}
+
+async function walkMarkdownFiles(
+  rootDir: string,
+  ignorePatterns: readonly string[],
+  currentDir = rootDir
+): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(currentDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = normalizePath(path.relative(rootDir, fullPath));
+
+    if (shouldIgnore(relativePath, ignorePatterns)) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      files.push(...(await walkMarkdownFiles(rootDir, ignorePatterns, fullPath)));
+    } else if (entry.isFile() && isMarkdownFile(relativePath)) {
+      files.push(relativePath);
+    }
+  }
+
+  return files.sort();
+}
+
+function taskLooksDocumentFocused(task: string): boolean {
+  return /doc|docs|document|markdown|readme|prd|requirement|handoff|progress|note|stale|outdated|obsolete|文档|过时|梳理|需求|交接|记录|说明|有用/iu.test(task);
+}
+
+function taskDiscoveryTokens(task: string): string[] {
+  const normalized = task.toLowerCase();
+  const tokens = normalized
+    .split(/[^a-z0-9_./-]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+
+  if (/\b(edit|editing|editor|wysiwyg|write|writing)\b/iu.test(task) || /编辑|写作|富文本/u.test(task)) {
+    tokens.push("editor", "edit", "tiptap", "novel");
+  }
+  if (/\b(style|styles|theme|themes|appearance|design)\b/iu.test(task) || /风格|样式|主题|外观|排版/u.test(task)) {
+    tokens.push("style", "theme", "appearance", "design");
+  }
+  if (/\b(markdown|md)\b/iu.test(task) || /马克down|文档/u.test(task)) {
+    tokens.push("markdown", "doc", "docs");
+  }
+  if (/\b(requirement|requirements|prd|handoff|progress)\b/iu.test(task) || /需求|交接|进度|记录/u.test(task)) {
+    tokens.push("requirement", "requirements", "prd", "handoff", "progress");
+  }
+  if (/\b(export|download|copy|clipboard|pdf)\b/iu.test(task) || /导出|下载|复制/u.test(task)) {
+    tokens.push("export", "download", "copy", "clipboard", "pdf");
+  }
+  if (/\b(wechat|weixin)\b/iu.test(task) || /微信|公众号/u.test(task)) {
+    tokens.push("wechat");
+  }
+  if (/\b(auth|login|permission|security)\b/iu.test(task) || /登录|权限|安全/u.test(task)) {
+    tokens.push("auth", "login", "permission", "security");
+  }
+
+  const lowSignal = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "whether",
+    "check",
+    "support",
+    "supports",
+    "different",
+    "project",
+    "feature",
+    "markdown"
+  ]);
+
+  return unique(tokens).filter((token) => !lowSignal.has(token));
+}
+
+function scoreEntryFile(
+  filePath: string,
+  content: string,
+  tokens: string[]
+): DiscoveredEntryFile | undefined {
+  const normalizedPath = filePath.toLowerCase();
+  const basename = path.posix.basename(normalizedPath, path.posix.extname(normalizedPath));
+  const normalizedContent = content.toLowerCase();
+  const matchedTokens = new Set<string>();
+  let score = 0;
+
+  for (const token of tokens) {
+    if (basename.includes(token)) {
+      score += 8;
+      matchedTokens.add(token);
+    }
+    if (normalizedPath.includes(token)) {
+      score += 5;
+      matchedTokens.add(token);
+    }
+    if (normalizedContent.includes(token)) {
+      score += 1;
+      matchedTokens.add(token);
+    }
+  }
+
+  if (matchedTokens.size === 0 || score <= 0) {
+    return undefined;
+  }
+
+  const entrypointBoosts = [
+    "page.",
+    "route.",
+    "layout.",
+    "client.",
+    "manager.",
+    "editor.",
+    "config.",
+    "settings."
+  ];
+  if (entrypointBoosts.some((signal) => normalizedPath.includes(signal))) {
+    score += 3;
+  }
+  if (normalizedPath.startsWith("components/") || normalizedPath.startsWith("app/")) {
+    score += 2;
+  }
+
+  return {
+    path: filePath,
+    score,
+    matchedTokens: [...matchedTokens].sort()
+  };
+}
+
+function scoreMarkdownDoc(
+  filePath: string,
+  content: string,
+  tokens: string[]
+): DiscoveredEntryFile | undefined {
+  const normalizedPath = filePath.toLowerCase();
+  const basename = path.posix.basename(normalizedPath, ".md");
+  const firstHeading = content
+    .split("\n")
+    .find((line) => line.trim().startsWith("#"))
+    ?.replace(/^#+\s*/u, "")
+    .toLowerCase() ?? "";
+  const normalizedContent = content.slice(0, DISCOVERY_CONTENT_LIMIT).toLowerCase();
+  const matchedTokens = new Set<string>();
+  let score = 0;
+
+  const docSignals = [
+    "readme",
+    "agents",
+    "prd",
+    "requirement",
+    "requirements",
+    "start",
+    "progress",
+    "handoff",
+    "pitfall",
+    "guide",
+    "checklist",
+    "需求",
+    "业务",
+    "交接",
+    "进度",
+    "指南"
+  ];
+
+  for (const signal of docSignals) {
+    if (normalizedPath.includes(signal) || firstHeading.includes(signal)) {
+      score += 4;
+    }
+  }
+
+  for (const token of tokens) {
+    if (basename.includes(token) || firstHeading.includes(token)) {
+      score += 8;
+      matchedTokens.add(token);
+    }
+    if (normalizedPath.includes(token)) {
+      score += 5;
+      matchedTokens.add(token);
+    }
+    if (normalizedContent.includes(token)) {
+      score += 1;
+      matchedTokens.add(token);
+    }
+  }
+
+  if (normalizedPath.startsWith("docs/") || normalizedPath.startsWith("sheet/")) {
+    score += 3;
+  }
+  if (!normalizedPath.includes("/")) {
+    score += 2;
+  }
+
+  if (score <= 0) {
+    return undefined;
+  }
+
+  return {
+    path: filePath,
+    score,
+    matchedTokens: [...matchedTokens].sort()
+  };
+}
+
+async function discoverEntryFiles(
+  rootDir: string,
+  task: string,
+  ignorePatterns: readonly string[]
+): Promise<string[]> {
+  const tokens = taskDiscoveryTokens(task);
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  const files = await walkSourceFiles(rootDir, ignorePatterns);
+  const scored: DiscoveredEntryFile[] = [];
+  for (const filePath of files) {
+    const content = (await readFile(resolveProjectPath(rootDir, filePath), "utf8")).slice(
+      0,
+      DISCOVERY_CONTENT_LIMIT
+    );
+    const score = scoreEntryFile(filePath, content, tokens);
+    if (score) {
+      scored.push(score);
+    }
+  }
+
+  return selectDiverseEntryFiles(
+    scored.sort((left, right) => right.score - left.score || left.path.localeCompare(right.path)),
+    tokens
+  )
+    .map((item) => `${item.path} (matched: ${item.matchedTokens.join(", ")})`);
+}
+
+async function discoverMarkdownDocs(
+  rootDir: string,
+  task: string,
+  ignorePatterns: readonly string[]
+): Promise<string[]> {
+  if (!taskLooksDocumentFocused(task)) {
+    return [];
+  }
+
+  const tokens = taskDiscoveryTokens(task);
+  const files = await walkMarkdownFiles(rootDir, ignorePatterns);
+  const scored: DiscoveredEntryFile[] = [];
+  for (const filePath of files) {
+    const content = await readFile(resolveProjectPath(rootDir, filePath), "utf8");
+    const score = scoreMarkdownDoc(filePath, content, tokens);
+    if (score) {
+      scored.push(score);
+    }
+  }
+
+  return scored
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, DISCOVERED_DOC_LIMIT)
+    .map((item) =>
+      item.matchedTokens.length > 0
+        ? `${item.path} (matched: ${item.matchedTokens.join(", ")})`
+        : item.path
+    );
+}
+
+function selectDiverseEntryFiles(
+  scored: DiscoveredEntryFile[],
+  tokens: string[]
+): DiscoveredEntryFile[] {
+  const selected = new Map<string, DiscoveredEntryFile>();
+  const preferredTokens = [
+    "editor",
+    "theme",
+    "appearance",
+    "style",
+    "markdown",
+    "wechat",
+    "export",
+    "auth",
+    "schema"
+  ].filter((token) => tokens.includes(token));
+
+  for (const token of preferredTokens) {
+    const candidate = scored.find((item) => item.path.toLowerCase().includes(token));
+    if (candidate) {
+      selected.set(candidate.path, candidate);
+    }
+  }
+
+  for (const item of scored) {
+    selected.set(item.path, item);
+    if (selected.size >= DISCOVERED_ENTRY_FILE_LIMIT) {
+      break;
+    }
+  }
+
+  return [...selected.values()]
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, DISCOVERED_ENTRY_FILE_LIMIT);
 }
 
 function relatedModules(results: SearchResult[]): string[] {
@@ -198,10 +603,111 @@ function formatSection(section: BriefSection): string {
   return `## ${section.title}\n${body}`;
 }
 
+function sectionItems(brief: DevelopmentBrief, title: string): string[] {
+  return brief.sections.find((section) => section.title === title)?.items ?? [];
+}
+
+function compactItems(items: string[], fallback: string): string[] {
+  return items.length > 0 ? items : [fallback];
+}
+
+function removeItem(items: string[], value: string): string[] {
+  return items.filter((item) => item !== value);
+}
+
+function firstMatchingItem(items: string[], pattern: RegExp): string | undefined {
+  return items.find((item) => pattern.test(item));
+}
+
 export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string {
-  const title = `# Development Brief: ${brief.task}`;
-  const sections = brief.sections.map(formatSection).join("\n\n");
-  return `${title}\n\n${sections}\n`;
+  const mustRead = sectionItems(brief, "Suggested Must-Read Files");
+  const discoveredDocs = removeItem(
+    sectionItems(brief, "Discovered Markdown Docs"),
+    "No task-matching Markdown docs discovered."
+  );
+  const discoveredEntryFiles = removeItem(
+    sectionItems(brief, "Discovered Entry Files"),
+    "No task-matching source entry files discovered."
+  );
+  const rules = removeItem(
+    sectionItems(brief, "Project Rules and Constraints"),
+    "No matching rule pages found."
+  );
+  const pitfalls = removeItem(
+    sectionItems(brief, "Known Pitfalls"),
+    "No matching pitfall pages found."
+  );
+  const acceptance = sectionItems(brief, "Acceptance Criteria");
+  const architectureGuard = sectionItems(brief, "Architecture Guard");
+  const graphify = sectionItems(brief, "Graphify Structural Context");
+  const modules = removeItem(
+    sectionItems(brief, "Relevant Modules"),
+    "No matching module pages found."
+  );
+  const highRiskFiles = removeItem(
+    sectionItems(brief, "High-Risk Files"),
+    "No high-risk files matched this task."
+  );
+  const tests = [
+    firstMatchingItem(acceptance, /test/i),
+    firstMatchingItem(architectureGuard, /Focused tests/i)
+  ].filter((item): item is string => Boolean(item));
+  const otherContext = [
+    ...modules.map((item) => `Module: ${item}`),
+    ...highRiskFiles.map((item) => `High-risk file: ${item}`),
+    ...sectionItems(brief, "Architecture Boundaries"),
+    ...sectionItems(brief, "Hardcoding and Configuration Risks"),
+    ...sectionItems(brief, "Portability Checklist"),
+    ...sectionItems(brief, "Module Memory to Maintain")
+  ];
+  const sections: BriefSection[] = [
+    {
+      title: "Must Read",
+      items: [
+        `Task: ${brief.task}`,
+        ...compactItems(
+          [...mustRead, ...discoveredDocs, ...discoveredEntryFiles],
+          "No specific must-read files matched this task."
+        )
+      ]
+    },
+    {
+      title: "Do Not",
+      items: [
+        "Do not treat this brief as exact code instructions.",
+        "Do not overwrite, delete, or promote user-owned AIWiki memory by default.",
+        "Do not add remote services, Web UI, MCP, or heavy retrieval unless the task explicitly asks for it."
+      ]
+    },
+    {
+      title: "Rules",
+      items: compactItems(rules, "No matching rules found.")
+    },
+    {
+      title: "Pitfalls",
+      items: compactItems(pitfalls, "No matching pitfalls found.")
+    },
+    {
+      title: "Suggested Tests",
+      items: compactItems(tests, "Run relevant project checks and add focused regression tests for changed behavior.")
+    },
+    ...(architectureGuard.length > 0
+      ? [{ title: "Architecture Guard", items: architectureGuard }]
+      : []),
+    ...(graphify.length > 0
+      ? [{ title: "Graphify Context", items: graphify }]
+      : []),
+    {
+      title: "Other Context",
+      items: compactItems(otherContext, "No additional context matched this task.")
+    }
+  ];
+
+  return [
+    `# Development Brief: ${brief.task}`,
+    "",
+    ...sections.flatMap((section) => [formatSection(section), ""])
+  ].join("\n").trimEnd() + "\n";
 }
 
 function briefToJson(brief: DevelopmentBrief): string {
@@ -263,6 +769,10 @@ export async function generateDevelopmentBrief(
 ): Promise<BriefResult> {
   const config = await loadAIWikiConfig(rootDir);
   const indexSummary = await readIndexSummary(rootDir);
+  const ignorePatterns = unique([
+    ...PROJECT_SCAN_EXCLUDED_PATHS,
+    ...config.ignore
+  ]);
   const search = await searchWikiMemory(rootDir, task, {
     limit: options.limit ?? DEFAULT_BRIEF_LIMIT
   });
@@ -276,6 +786,11 @@ export async function generateDevelopmentBrief(
     highRiskFiles: riskFiles,
     ignorePatterns: config.ignore
   });
+  const documentFocused = taskLooksDocumentFocused(task);
+  const discoveredDocs = await discoverMarkdownDocs(rootDir, task, ignorePatterns);
+  const discoveredEntryFiles = documentFocused
+    ? []
+    : await discoverEntryFiles(rootDir, task, ignorePatterns);
   const graphify = options.withGraphify
     ? await loadGraphifyContext(rootDir)
     : undefined;
@@ -368,6 +883,20 @@ export async function generateDevelopmentBrief(
       {
         title: "Suggested Must-Read Files",
         items: bulletOrFallback(readFiles, "No specific must-read files matched this task.")
+      },
+      {
+        title: "Discovered Markdown Docs",
+        items: bulletOrFallback(
+          discoveredDocs,
+          "No task-matching Markdown docs discovered."
+        )
+      },
+      {
+        title: "Discovered Entry Files",
+        items: bulletOrFallback(
+          discoveredEntryFiles,
+          "No task-matching source entry files discovered."
+        )
       },
       {
         title: "Acceptance Criteria",
