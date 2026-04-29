@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { loadAIWikiConfig } from "./config.js";
-import { RISK_FILE_KEYWORDS } from "./constants.js";
+import { REFLECT_EVALS_PATH, RISK_FILE_KEYWORDS } from "./constants.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
@@ -410,6 +410,29 @@ async function writeOutputPlanFile(
   return outputPath;
 }
 
+async function appendReflectEvalCase(
+  rootDir: string,
+  preview: ReflectPreview
+): Promise<void> {
+  const evalPath = resolveProjectPath(rootDir, REFLECT_EVALS_PATH);
+  await mkdir(path.dirname(evalPath), { recursive: true });
+  const event = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+    time: new Date().toISOString(),
+    command: "reflect",
+    input: {
+      fromGitDiff: preview.fromGitDiff,
+      notesPath: preview.notesPath
+    },
+    changedFiles: preview.changedFiles,
+    selectedDocs: preview.selectedDocs,
+    outputPlanPath: preview.outputPlanPath,
+    updatePlanDraftEntries: preview.updatePlanDraft?.entries.length ?? 0,
+    outcome: "unknown"
+  };
+  await appendFile(evalPath, `${JSON.stringify(event)}\n`, "utf8");
+}
+
 export async function generateReflectPreview(
   rootDir: string,
   options: ReflectOptions = {}
@@ -532,6 +555,8 @@ export async function generateReflectPreview(
       options.force ?? false
     );
   }
+
+  await appendReflectEvalCase(rootDir, preview);
 
   const markdown = formatReflectPreviewMarkdown(preview);
   const json = reflectToJson(preview);

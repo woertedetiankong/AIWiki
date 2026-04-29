@@ -55,8 +55,15 @@ export {
 export {
   buildWikiGraph,
   formatBacklinksJson,
-  formatGraphJson
+  formatGraphJson,
+  formatGraphRelateMarkdown,
+  relateGraphFile
 } from "./graph.js";
+export {
+  formatGraphifyContextMarkdown,
+  importGraphifyContext,
+  loadGraphifyContext
+} from "./graphify.js";
 export {
   formatFileGuardrailsMarkdown,
   generateFileGuardrails
@@ -77,6 +84,8 @@ export {
   formatModuleImportPreviewMarkdown,
   formatModulePackExportMarkdown,
   generateModuleImportPreview,
+  generateModuleMemoryBrief,
+  lintModuleMemory,
   modulePackSchema,
   readModulePackFile
 } from "./module-pack.js";
@@ -139,8 +148,20 @@ export type {
 export type {
   BacklinksJson,
   GraphBuildOptions,
-  GraphBuildResult
+  GraphBuildResult,
+  GraphRelatedEdge,
+  GraphRelatedPage,
+  GraphRelate,
+  GraphRelateOptions,
+  GraphRelateResult
 } from "./graph.js";
+export type {
+  GraphifyContext,
+  GraphifyEdge,
+  GraphifyImportResult,
+  GraphifyImportOptions,
+  GraphifyNode
+} from "./graphify.js";
 export type {
   FileGuardrails,
   FileGuardrailSection,
@@ -161,6 +182,18 @@ export type {
 } from "./lint.js";
 export type {
   ModuleImportPreview,
+  ModuleImportRisk,
+  ModuleImportRiskCode,
+  ModuleImportRiskSeverity,
+  ModuleLintIssue,
+  ModuleLintIssueCode,
+  ModuleLintReport,
+  ModuleLintResult,
+  ModuleLintSeverity,
+  ModuleMemoryBrief,
+  ModuleMemoryBriefOptions,
+  ModuleMemoryBriefResult,
+  ModuleMemoryPage,
   ModulePack,
   ModulePackExportOptions,
   ModulePackExportResult,

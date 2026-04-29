@@ -152,4 +152,4 @@ Tests       51 passed (51)
 1. 为 `aiwiki apply` 增加 diff-style preview，让 append / create 的正文预览更清楚。
 2. 为 `reflect` / `ingest` 增加 `--output-plan <path>`，直接把草案保存成 JSON 文件。
 3. 做 `lint --fix`，只修复 index/backlinks/格式等低风险问题。
-4. 增强 graph related / hotspots / conflicts。
+4. 增强 graph relate / hotspots / conflicts。

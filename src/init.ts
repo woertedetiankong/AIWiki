@@ -3,7 +3,10 @@ import path from "node:path";
 import {
   AIWIKI_DIRECTORIES,
   AIWIKI_GITKEEP_DIRECTORIES,
+  AIWIKI_VERSION,
+  BACKLINKS_JSON_PATH,
   CONFIG_PATH,
+  GRAPH_JSON_PATH,
   INITIAL_EVAL_FILES,
   INITIAL_GRAPH_FILES,
   LOG_PATH
@@ -38,6 +41,37 @@ async function hasGitRepository(rootDir: string): Promise<boolean> {
 
     throw error;
   }
+}
+
+function initialGraphFileContent(graphFile: string): string {
+  const generatedAt = new Date().toISOString();
+
+  if (graphFile === GRAPH_JSON_PATH) {
+    return `${JSON.stringify(
+      {
+        version: AIWIKI_VERSION,
+        generated_at: generatedAt,
+        nodes: [],
+        edges: []
+      },
+      null,
+      2
+    )}\n`;
+  }
+
+  if (graphFile === BACKLINKS_JSON_PATH) {
+    return `${JSON.stringify(
+      {
+        version: AIWIKI_VERSION,
+        generated_at: generatedAt,
+        backlinks: {}
+      },
+      null,
+      2
+    )}\n`;
+  }
+
+  return "{}\n";
 }
 
 export async function initAIWiki(options: InitOptions = {}): Promise<InitResult> {
@@ -77,7 +111,7 @@ export async function initAIWiki(options: InitOptions = {}): Promise<InitResult>
   }
 
   for (const graphFile of INITIAL_GRAPH_FILES) {
-    await writeManagedFile(rootDir, graphFile, "{}\n", {
+    await writeManagedFile(rootDir, graphFile, initialGraphFileContent(graphFile), {
       force: false,
       forceable: false,
       result

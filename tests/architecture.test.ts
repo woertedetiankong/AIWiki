@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { initAIWiki } from "../src/init.js";
@@ -93,7 +94,9 @@ describe("generateArchitectureAudit", () => {
     );
 
     const cliPath = path.resolve("src", "cli.ts");
-    const tsxLoader = path.resolve("node_modules", "tsx", "dist", "loader.mjs");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
     const { stdout } = await execFileAsync(
       process.execPath,
       ["--import", tsxLoader, cliPath, "architecture", "audit"],

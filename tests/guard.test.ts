@@ -146,4 +146,27 @@ describe("generateFileGuardrails", () => {
     const parsed = JSON.parse(result.json) as { filePath: string };
     expect(parsed.filePath).toBe("src/lib/stripe.ts");
   });
+
+  it("adds architecture guardrails for route and high-risk files when requested", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addGuardMemory(rootDir);
+
+    const result = await generateFileGuardrails(
+      rootDir,
+      "src/app/api/stripe/webhook/route.ts",
+      { architectureGuard: true }
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const section = parsed.sections.find(
+      (item) => item.title === "Architecture Guard"
+    );
+
+    expect(result.markdown).toContain("## Architecture Guard");
+    expect(section?.items.join("\n")).toContain("Route/controller boundary");
+    expect(section?.items.join("\n")).toContain("High-risk signals");
+    expect(section?.items.join("\n")).toContain("webhooks");
+  });
 });

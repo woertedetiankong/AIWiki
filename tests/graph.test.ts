@@ -1,10 +1,15 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { buildWikiGraph } from "../src/graph.js";
+import { buildWikiGraph, relateGraphFile } from "../src/graph.js";
 import { initAIWiki } from "../src/init.js";
 import { writeMarkdownFile } from "../src/markdown.js";
+
+const execFileAsync = promisify(execFile);
 
 async function tempProject(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "aiwiki-graph-"));
@@ -111,5 +116,98 @@ describe("buildWikiGraph", () => {
     expect(backlinks.backlinks["wiki/pitfalls/stripe-webhook.md"]).toContain(
       "wiki/modules/payment.md"
     );
+  });
+});
+
+describe("relateGraphFile", () => {
+  it("summarizes wiki graph relations for a referenced file", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addGraphMemory(rootDir);
+
+    const result = await relateGraphFile(rootDir, "src/lib/stripe.ts");
+
+    expect(result.relation.fileNodeId).toBe("file:src/lib/stripe.ts");
+    expect(result.relation.referencedBy).toContainEqual(
+      expect.objectContaining({
+        id: "wiki/modules/payment.md",
+        title: "Payment"
+      })
+    );
+    expect(result.relation.relatedModules).toContain("payment");
+    expect(result.relation.adjacentEdges).toContainEqual(
+      expect.objectContaining({
+        from: "wiki/modules/payment.md",
+        to: "file:src/lib/stripe.ts",
+        type: "references_file"
+      })
+    );
+    expect(result.markdown).toContain("# Graph Relations: src/lib/stripe.ts");
+  });
+
+  it("returns a stable empty relation summary for unknown files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addGraphMemory(rootDir);
+
+    const result = await relateGraphFile(rootDir, "src/unknown.ts");
+
+    expect(result.relation.referencedBy).toEqual([]);
+    expect(result.markdown).toContain("No wiki pages reference this file.");
+  });
+
+  it("rejects files outside the project root", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    await expect(
+      relateGraphFile(rootDir, path.join(os.tmpdir(), "outside.ts"))
+    ).rejects.toThrow("outside project root");
+  });
+
+  it("includes Graphify warnings when requested and Graphify output is missing", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addGraphMemory(rootDir);
+
+    const result = await relateGraphFile(rootDir, "src/lib/stripe.ts", {
+      withGraphify: true
+    });
+
+    expect(result.relation.graphify?.available).toBe(false);
+    expect(result.relation.graphify?.warnings).toContain("Missing GRAPH_REPORT.md.");
+    expect(result.markdown).toContain("## Graphify Structural Context");
+  });
+
+  it("exposes graph relate through the CLI with json output", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addGraphMemory(rootDir);
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        tsxLoader,
+        cliPath,
+        "graph",
+        "relate",
+        "src/lib/stripe.ts",
+        "--format",
+        "json"
+      ],
+      { cwd: rootDir }
+    );
+    const parsed = JSON.parse(stdout) as {
+      filePath: string;
+      relatedModules: string[];
+    };
+
+    expect(parsed.filePath).toBe("src/lib/stripe.ts");
+    expect(parsed.relatedModules).toContain("payment");
   });
 });

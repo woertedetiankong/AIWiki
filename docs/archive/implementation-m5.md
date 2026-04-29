@@ -14,9 +14,9 @@
 
 ```bash
 aiwiki reflect
-aiwiki reflect --notes notes/today.md
+aiwiki reflect --notes notes/session.md
 aiwiki reflect --from-git-diff
-aiwiki reflect --from-git-diff --notes notes/today.md
+aiwiki reflect --from-git-diff --notes notes/session.md
 aiwiki reflect --format json
 ```
 

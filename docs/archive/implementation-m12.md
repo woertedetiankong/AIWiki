@@ -22,7 +22,7 @@ aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm
 `aiwiki reflect` 新增：
 
 ```bash
-aiwiki reflect --notes notes/today.md --output-plan .aiwiki/context-packs/reflect-plan.json
+aiwiki reflect --notes notes/session.md --output-plan .aiwiki/context-packs/reflect-plan.json
 aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.json --force
 ```
 
@@ -147,7 +147,7 @@ Tests       55 passed (55)
 - 交互式确认 UI。
 - 智能 merge 已有 wiki 页面。
 - `lint --fix` 低风险自动修复。
-- graph related / hotspots / conflicts。
+- graph relate / hotspots / conflicts。
 - agent 规则文件同步确认流程。
 - LLM 辅助总结。
 - SQLite FTS / BM25 / 向量搜索。
@@ -165,5 +165,5 @@ Tests       55 passed (55)
 
 1. 进入 Milestone 13：记忆质量字段和 lifecycle lint。
 2. 增加 `lint --fix`，仅修复 index/backlinks/格式等低风险问题。
-3. 增强 graph related / hotspots / conflicts。
+3. 增强 graph relate / hotspots / conflicts。
 4. 增加检索反馈记录与 retrieval tuning。

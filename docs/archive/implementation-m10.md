@@ -162,7 +162,7 @@ node dist/cli.js apply plan.json --confirm --format json
 - 交互式确认 UI。
 - 智能 merge 已有 wiki 页面。
 - 同步 rule 到项目根 `AGENTS.md`、`CLAUDE.md` 或 `.cursor/rules`。
-- `graph related`、`graph hotspots`、`graph conflicts`。
+- `graph relate`、`graph hotspots`、`graph conflicts`。
 
 说明：
 

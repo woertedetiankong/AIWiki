@@ -142,7 +142,7 @@ node dist/cli.js lint --format json
 本轮未实现：
 
 - `aiwiki lint --fix`。
-- graph related / hotspots / conflicts。
+- graph relate / hotspots / conflicts。
 - 自动修复 index、backlinks 或格式。
 - 自动合并重复 pitfall。
 - 自动升级规则。

@@ -6,6 +6,8 @@ import {
   GRAPH_JSON_PATH
 } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
+import { loadGraphifyContext } from "./graphify.js";
+import type { GraphifyContext } from "./graphify.js";
 import { appendLogEntry } from "./log.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import type {
@@ -38,12 +40,65 @@ export interface GraphBuildResult {
   };
 }
 
+export interface GraphRelateOptions {
+  withGraphify?: boolean;
+}
+
+export interface GraphRelatedPage {
+  id: string;
+  title: string;
+  type: GraphNode["type"];
+  path?: string;
+  severity?: string;
+}
+
+export interface GraphRelatedEdge {
+  from: string;
+  to: string;
+  type: GraphEdgeType;
+  source?: string;
+}
+
+export interface GraphRelate {
+  filePath: string;
+  fileNodeId: string;
+  referencedBy: GraphRelatedPage[];
+  relatedModules: string[];
+  adjacentEdges: GraphRelatedEdge[];
+  graphify?: {
+    available: boolean;
+    warnings: string[];
+    relatedFiles: string[];
+    relatedEdges: string[];
+  };
+}
+
+export interface GraphRelateResult {
+  relation: GraphRelate;
+  markdown: string;
+  json: string;
+}
+
 function docId(page: WikiPage): string {
   return `wiki/${page.relativePath}`;
 }
 
 function fileId(filePath: string): string {
   return `file:${toPosixPath(filePath).replace(/^\.\//u, "")}`;
+}
+
+function normalizeTargetFile(rootDir: string, filePath: string): string {
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : resolveProjectPath(rootDir, filePath);
+  const root = path.resolve(rootDir);
+  const relativePath = path.relative(root, absolutePath);
+
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`Refusing to relate a file outside project root: ${filePath}`);
+  }
+
+  return toPosixPath(relativePath).replace(/^\.\//u, "");
 }
 
 function titleForPage(page: WikiPage): string {
@@ -157,6 +212,90 @@ export function formatBacklinksJson(backlinks: BacklinksJson): string {
   return `${JSON.stringify(backlinks, null, 2)}\n`;
 }
 
+function pageByNodeId(graph: GraphJson): Map<string, GraphNode> {
+  return new Map(graph.nodes.map((node) => [node.id, node]));
+}
+
+function graphifyRelation(
+  filePath: string,
+  context: GraphifyContext
+): GraphRelate["graphify"] {
+  const relatedFiles = context.files.filter((file) => {
+    return file === filePath || file.endsWith(`/${filePath}`) || filePath.endsWith(file);
+  });
+  const relatedEdges = context.edges
+    .filter((edge) => edge.from.includes(filePath) || edge.to.includes(filePath))
+    .slice(0, 12)
+    .map((edge) => {
+      const details = [
+        edge.type ? `type ${edge.type}` : undefined,
+        edge.confidence ? `confidence ${edge.confidence}` : undefined
+      ].filter(Boolean);
+      return `${edge.from} -> ${edge.to}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
+    });
+
+  return {
+    available: context.available,
+    warnings: context.warnings,
+    relatedFiles,
+    relatedEdges
+  };
+}
+
+function formatList(items: string[], fallback: string): string {
+  return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : `- ${fallback}`;
+}
+
+function formatRelatedPages(pages: GraphRelatedPage[]): string[] {
+  return pages.map((page) => {
+    const details = [
+      page.type,
+      page.path,
+      page.severity ? `severity ${page.severity}` : undefined
+    ].filter(Boolean);
+    return `${page.title} (${details.join("; ")})`;
+  });
+}
+
+function formatRelatedEdges(edges: GraphRelatedEdge[]): string[] {
+  return edges.map((edge) => {
+    const source = edge.source ? `; source ${edge.source}` : "";
+    return `${edge.from} -> ${edge.to} (${edge.type}${source})`;
+  });
+}
+
+export function formatGraphRelateMarkdown(relation: GraphRelate): string {
+  const graphifyLines = relation.graphify
+    ? `
+## Graphify Structural Context
+- Available: ${relation.graphify.available ? "yes" : "no"}
+${formatList(relation.graphify.warnings.map((warning) => `Warning: ${warning}`), "No warnings.")}
+${formatList(relation.graphify.relatedFiles.map((file) => `Related file reference: ${file}.`), "No related Graphify file references.")}
+${formatList(relation.graphify.relatedEdges.map((edge) => `Related relation: ${edge}.`), "No related Graphify edges.")}
+`
+    : "";
+
+  return `# Graph Relations: ${relation.filePath}
+
+## Referenced By
+${formatList(formatRelatedPages(relation.referencedBy), "No wiki pages reference this file.")}
+
+## Related Modules
+${formatList(relation.relatedModules, "No related module nodes found.")}
+
+## Adjacent Graph Edges
+${formatList(formatRelatedEdges(relation.adjacentEdges), "No adjacent graph edges found.")}
+${graphifyLines}
+## Safety
+- This command is read-only.
+- Graph and Graphify relations are task context, not confirmed AIWiki memory.
+`;
+}
+
+function graphRelateToJson(relation: GraphRelate): string {
+  return `${JSON.stringify(relation, null, 2)}\n`;
+}
+
 export async function buildWikiGraph(
   rootDir: string,
   options: GraphBuildOptions = {}
@@ -260,4 +399,64 @@ export async function buildWikiGraph(
   }
 
   return { graph, backlinks, json, backlinksJson, outputPaths };
+}
+
+export async function relateGraphFile(
+  rootDir: string,
+  filePath: string,
+  options: GraphRelateOptions = {}
+): Promise<GraphRelateResult> {
+  await loadAIWikiConfig(rootDir);
+  const normalizedFile = normalizeTargetFile(rootDir, filePath);
+  const nodeId = fileId(normalizedFile);
+  const graph = (await buildWikiGraph(rootDir)).graph;
+  const nodes = pageByNodeId(graph);
+  const referencingEdges = graph.edges.filter((edge) => edge.to === nodeId);
+  const pageIds = new Set(referencingEdges.map((edge) => edge.from));
+  const referencedBy = [...pageIds]
+    .map((id) => nodes.get(id))
+    .filter((node): node is GraphNode => Boolean(node))
+    .map((node) => ({
+      id: node.id,
+      title: node.label,
+      type: node.type,
+      path: node.path,
+      severity: node.severity
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const relatedModules = [
+    ...new Set(
+      graph.edges
+        .filter((edge) => pageIds.has(edge.from) && edge.to.startsWith("module:"))
+        .map((edge) => nodes.get(edge.to)?.label ?? edge.to.replace(/^module:/u, ""))
+    )
+  ].sort();
+  const adjacentEdges = graph.edges
+    .filter((edge) => edge.from === nodeId || edge.to === nodeId || pageIds.has(edge.from))
+    .map((edge) => ({
+      from: edge.from,
+      to: edge.to,
+      type: edge.type,
+      source: edge.source
+    }))
+    .sort((left, right) =>
+      `${left.from}:${left.to}:${left.type}`.localeCompare(`${right.from}:${right.to}:${right.type}`)
+    );
+  const graphify = options.withGraphify
+    ? graphifyRelation(normalizedFile, await loadGraphifyContext(rootDir))
+    : undefined;
+  const relation: GraphRelate = {
+    filePath: normalizedFile,
+    fileNodeId: nodeId,
+    referencedBy,
+    relatedModules,
+    adjacentEdges,
+    graphify
+  };
+
+  return {
+    relation,
+    markdown: formatGraphRelateMarkdown(relation),
+    json: graphRelateToJson(relation)
+  };
 }

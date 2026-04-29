@@ -272,13 +272,55 @@ function checkpointLine(checkpoint: TaskCheckpoint): string {
   return parts.join(" | ") || "Checkpoint recorded.";
 }
 
+function validateCheckpointEvent(value: unknown, taskId: string, lineNumber: number): TaskCheckpoint {
+  if (!value || typeof value !== "object") {
+    throw new Error(
+      `Corrupt task event log for ${taskId}: line ${lineNumber} is not a JSON object.`
+    );
+  }
+
+  const event = value as Partial<TaskCheckpoint>;
+  if (typeof event.time !== "string" || event.time.trim().length === 0) {
+    throw new Error(
+      `Corrupt task event log for ${taskId}: line ${lineNumber} is missing string field time.`
+    );
+  }
+  if (
+    event.type !== "checkpoint" &&
+    event.type !== "decision" &&
+    event.type !== "blocker"
+  ) {
+    throw new Error(
+      `Corrupt task event log for ${taskId}: line ${lineNumber} has unsupported event type.`
+    );
+  }
+
+  return event as TaskCheckpoint;
+}
+
 async function readCheckpoints(rootDir: string, taskId: string): Promise<TaskCheckpoint[]> {
   const raw = await readText(taskFile(rootDir, taskId, "checkpoints.jsonl"));
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as TaskCheckpoint);
+  const events: TaskCheckpoint[] = [];
+  const lines = raw.split("\n");
+  for (const [index, rawLine] of lines.entries()) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line) as unknown;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Corrupt task event log for ${taskId}: line ${index + 1} is not valid JSON (${message}).`
+      );
+    }
+    events.push(validateCheckpointEvent(parsed, taskId, index + 1));
+  }
+
+  return events;
 }
 
 function renderProgress(checkpoints: TaskCheckpoint[]): string {
@@ -329,16 +371,50 @@ ${bulletList(tests, "No tests recorded.")}
 `;
 }
 
+function renderDecisions(checkpoints: TaskCheckpoint[]): string {
+  const decisions = checkpoints
+    .filter((checkpoint) => checkpoint.type === "decision")
+    .map((checkpoint) => {
+      return [
+        checkpoint.message ? `Decision: ${checkpoint.message}` : "Decision recorded.",
+        checkpoint.module ? `Module: ${checkpoint.module}` : undefined,
+        "Potential long-term wiki update: yes"
+      ].filter(Boolean).join(" | ");
+    });
+
+  return `# Decisions
+
+${bulletList(decisions, "None recorded.")}
+`;
+}
+
+function renderBlockers(checkpoints: TaskCheckpoint[]): string {
+  const blockers = checkpoints
+    .filter((checkpoint) => checkpoint.type === "blocker")
+    .map((checkpoint) => {
+      return [
+        checkpoint.message ? `Blocker: ${checkpoint.message}` : "Blocker recorded.",
+        checkpoint.severity ? `Severity: ${checkpoint.severity}` : undefined
+      ].filter(Boolean).join(" | ");
+    });
+
+  return `# Blockers
+
+${bulletList(blockers, "None recorded.")}
+`;
+}
+
 async function loadStatus(rootDir: string, taskId: string): Promise<TaskStatusData> {
   const metadata = await readMetadata(rootDir, taskId);
+  const checkpoints = await readCheckpoints(rootDir, taskId);
   return {
     metadata,
-    progress: await readText(taskFile(rootDir, taskId, "progress.md")),
-    decisions: await readText(taskFile(rootDir, taskId, "decisions.md")),
-    blockers: await readText(taskFile(rootDir, taskId, "blockers.md")),
-    changedFiles: await readText(taskFile(rootDir, taskId, "changed-files.md")),
-    tests: await readText(taskFile(rootDir, taskId, "tests.md")),
-    checkpoints: await readCheckpoints(rootDir, taskId)
+    progress: renderProgress(checkpoints),
+    decisions: renderDecisions(checkpoints),
+    blockers: renderBlockers(checkpoints),
+    changedFiles: renderChangedFiles(checkpoints),
+    tests: renderTests(checkpoints),
+    checkpoints
   };
 }
 
@@ -421,6 +497,16 @@ Use this resume brief as the source of truth for the current task state. Do not 
 `;
 }
 
+function checkpointsMarkdown(checkpoints: TaskCheckpoint[]): string {
+  if (checkpoints.length === 0) {
+    return "- No checkpoints recorded.";
+  }
+
+  return checkpoints
+    .map((checkpoint) => `- ${checkpoint.time} | ${checkpoint.type} | ${checkpointLine(checkpoint)}`)
+    .join("\n");
+}
+
 function statusMarkdown(status: TaskStatusData): string {
   return `# Task Status
 
@@ -435,9 +521,15 @@ ${status.metadata.status}
 
 ${status.progress.trim()}
 
+## Decisions
+${status.decisions.trim() || "- None recorded."}
+
 ${status.changedFiles.trim()}
 
 ${status.tests.trim()}
+
+## Checkpoints
+${checkpointsMarkdown(status.checkpoints)}
 
 ${status.blockers.trim()}
 `;
@@ -462,13 +554,15 @@ function toJson(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function appendMarkdownEntry(current: string, heading: string, lines: string[]): string {
-  const base =
-    current.trim().length > 0
-      ? current.replace(/\n- None recorded\.\s*$/u, "").trimEnd()
-      : `# ${heading}`;
-  const body = lines.map((line) => `- ${line}`).join("\n");
-  return `${base}\n\n## [${today()}]\n${body}\n`;
+async function syncTaskDerivedFiles(rootDir: string, taskId: string): Promise<TaskStatusData> {
+  const status = await loadStatus(rootDir, taskId);
+  await writeFile(taskFile(rootDir, taskId, "progress.md"), status.progress, "utf8");
+  await writeFile(taskFile(rootDir, taskId, "decisions.md"), status.decisions, "utf8");
+  await writeFile(taskFile(rootDir, taskId, "blockers.md"), status.blockers, "utf8");
+  await writeFile(taskFile(rootDir, taskId, "changed-files.md"), status.changedFiles, "utf8");
+  await writeFile(taskFile(rootDir, taskId, "tests.md"), status.tests, "utf8");
+  await writeFile(taskFile(rootDir, taskId, "resume.md"), resumeMarkdown(status), "utf8");
+  return status;
 }
 
 async function appendTaskEvent(
@@ -484,8 +578,7 @@ async function appendTaskEvent(
   const metadata = await readMetadata(rootDir, taskId);
   metadata.updated_at = event.time;
   await writeMetadata(rootDir, metadata);
-  const status = await loadStatus(rootDir, taskId);
-  await writeFile(taskFile(rootDir, taskId, "resume.md"), resumeMarkdown(status), "utf8");
+  await syncTaskDerivedFiles(rootDir, taskId);
 }
 
 export async function startTask(
@@ -603,21 +696,7 @@ export async function checkpointTask(
     files
   };
 
-  await appendFile(
-    taskFile(rootDir, id, "checkpoints.jsonl"),
-    `${JSON.stringify(checkpoint)}\n`,
-    "utf8"
-  );
-  const checkpoints = await readCheckpoints(rootDir, id);
-  await writeFile(taskFile(rootDir, id, "progress.md"), renderProgress(checkpoints), "utf8");
-  await writeFile(taskFile(rootDir, id, "changed-files.md"), renderChangedFiles(checkpoints), "utf8");
-  await writeFile(taskFile(rootDir, id, "tests.md"), renderTests(checkpoints), "utf8");
-  const metadata = await readMetadata(rootDir, id);
-  metadata.updated_at = checkpoint.time;
-  await writeMetadata(rootDir, metadata);
-  const status = await loadStatus(rootDir, id);
-  const resume = resumeMarkdown(status);
-  await writeFile(taskFile(rootDir, id, "resume.md"), resume, "utf8");
+  await appendTaskEvent(rootDir, id, checkpoint);
 
   return {
     data: checkpoint,
@@ -692,21 +771,6 @@ export async function recordTaskDecision(
     message: decision,
     module: options.module
   };
-  const decisionsPath = taskFile(rootDir, id, "decisions.md");
-  const current = await readText(decisionsPath);
-  await writeFile(
-    decisionsPath,
-    appendMarkdownEntry(
-      current,
-      "Decisions",
-      [
-        `Decision: ${decision}`,
-        options.module ? `Module: ${options.module}` : undefined,
-        "Potential long-term wiki update: yes"
-      ].filter((line): line is string => Boolean(line))
-    ),
-    "utf8"
-  );
   await appendTaskEvent(rootDir, id, event);
 
   return {
@@ -729,20 +793,6 @@ export async function recordTaskBlocker(
     message: blocker,
     severity: options.severity
   };
-  const blockersPath = taskFile(rootDir, id, "blockers.md");
-  const current = await readText(blockersPath);
-  await writeFile(
-    blockersPath,
-    appendMarkdownEntry(
-      current,
-      "Blockers",
-      [
-        `Blocker: ${blocker}`,
-        options.severity ? `Severity: ${options.severity}` : undefined
-      ].filter((line): line is string => Boolean(line))
-    ),
-    "utf8"
-  );
   await appendTaskEvent(rootDir, id, event);
 
   return {

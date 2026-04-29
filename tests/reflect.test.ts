@@ -201,6 +201,44 @@ describe("generateReflectPreview", () => {
     });
   });
 
+  it("appends reflect eval cases for each preview generation", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Auth rule\n\nAuth routes must check permissions server-side.\n"
+    );
+
+    await generateReflectPreview(rootDir, {
+      notes: "notes/today.md"
+    });
+    await generateReflectPreview(rootDir, {
+      notes: "notes/today.md"
+    });
+
+    const evals = (
+      await readFile(
+        path.join(rootDir, ".aiwiki", "evals", "reflect-cases.jsonl"),
+        "utf8"
+      )
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as {
+        command?: string;
+        input?: { notesPath?: string };
+        updatePlanDraftEntries?: number;
+      });
+
+    expect(evals).toHaveLength(2);
+    expect(evals[0]).toMatchObject({
+      command: "reflect",
+      input: { notesPath: "notes/today.md" }
+    });
+    expect(evals[0]?.updatePlanDraftEntries).toBeGreaterThanOrEqual(1);
+  });
+
   it("rejects output plan paths outside the project root", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

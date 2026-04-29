@@ -3,6 +3,8 @@ import path from "node:path";
 import { generateArchitectureBriefContext } from "./architecture.js";
 import { BRIEF_EVALS_PATH, INDEX_PATH } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
+import { loadGraphifyContext } from "./graphify.js";
+import type { GraphifyContext } from "./graphify.js";
 import { appendLogEntry } from "./log.js";
 import type { OutputFormat } from "./output.js";
 import { resolveProjectPath } from "./paths.js";
@@ -14,6 +16,8 @@ export interface BriefOptions {
   output?: string;
   force?: boolean;
   format?: OutputFormat;
+  withGraphify?: boolean;
+  architectureGuard?: boolean;
 }
 
 export interface BriefSection {
@@ -140,6 +144,55 @@ function ruleBullets(results: SearchResult[]): string[] {
     });
 }
 
+function graphifyBullets(context: GraphifyContext | undefined): string[] {
+  if (!context) {
+    return [];
+  }
+
+  const items = [
+    `Available: ${context.available ? "yes" : "no"}.`,
+    ...context.warnings.map((warning) => `Warning: ${warning}`),
+    context.graphPath ? `Graph JSON: ${context.graphPath}.` : undefined,
+    context.reportPath ? `Report: ${context.reportPath}.` : undefined,
+    context.nodes.length > 0 ? `Parsed nodes: ${context.nodes.length}.` : undefined,
+    context.edges.length > 0 ? `Parsed edges: ${context.edges.length}.` : undefined,
+    ...context.files.slice(0, 8).map((file) => `Graphify file reference: ${file}.`),
+    ...context.reportSummary.slice(0, 4)
+  ].filter((item): item is string => Boolean(item));
+
+  return items.length > 0
+    ? items
+    : ["Graphify context requested, but no Graphify output was found."];
+}
+
+function architectureGuardBullets(
+  task: string,
+  modules: string[],
+  riskFiles: string[]
+): string[] {
+  const taskText = task.toLowerCase();
+  const testHints = [
+    taskText.includes("webhook") ? "webhook event parsing and idempotency" : undefined,
+    taskText.includes("auth") || taskText.includes("permission") ? "auth and permission boundaries" : undefined,
+    taskText.includes("migration") || taskText.includes("schema") ? "migration rollback and schema compatibility" : undefined,
+    taskText.includes("billing") || taskText.includes("payment") || taskText.includes("stripe") ? "billing/payment state transitions" : undefined
+  ].filter((item): item is string => Boolean(item));
+
+  return [
+    modules.length > 0
+      ? `Likely modules: ${modules.join(", ")}.`
+      : "Likely modules: none detected from current wiki search.",
+    riskFiles.length > 0
+      ? `High-risk files to review: ${riskFiles.join(", ")}.`
+      : "High-risk files: none detected from config or matched memory.",
+    testHints.length > 0
+      ? `Focused tests should cover ${testHints.join(", ")}.`
+      : "Focused tests should cover state transitions, auth, webhooks, migrations, or billing if this task touches those domains.",
+    "Keep route/controller files thin; move business logic into module services or adapters when this task adds durable behavior.",
+    "This guard is advisory and must not automatically refactor code or block the task."
+  ];
+}
+
 function formatSection(section: BriefSection): string {
   const body = section.items.map((item) => `- ${item}`).join("\n");
   return `## ${section.title}\n${body}`;
@@ -223,6 +276,9 @@ export async function generateDevelopmentBrief(
     highRiskFiles: riskFiles,
     ignorePatterns: config.ignore
   });
+  const graphify = options.withGraphify
+    ? await loadGraphifyContext(rootDir)
+    : undefined;
 
   const brief: DevelopmentBrief = {
     task,
@@ -273,6 +329,22 @@ export async function generateDevelopmentBrief(
         title: "Module Memory to Maintain",
         items: architecture.moduleMemoryToMaintain
       },
+      ...(options.architectureGuard
+        ? [
+            {
+              title: "Architecture Guard",
+              items: architectureGuardBullets(task, modules, riskFiles)
+            }
+          ]
+        : []),
+      ...(options.withGraphify
+        ? [
+            {
+              title: "Graphify Structural Context",
+              items: graphifyBullets(graphify)
+            }
+          ]
+        : []),
       {
         title: "Relevant Modules",
         items: bulletOrFallback(modules, "No matching module pages found.")

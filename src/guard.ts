@@ -1,5 +1,8 @@
 import path from "node:path";
+import { RISK_FILE_KEYWORDS } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
+import { loadGraphifyContext } from "./graphify.js";
+import type { GraphifyContext } from "./graphify.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
 import type { RiskLevel, WikiPage, WikiPageType } from "./types.js";
@@ -7,6 +10,8 @@ import { findWikiPages } from "./wiki-store.js";
 
 export interface FileGuardrailsOptions {
   limit?: number;
+  withGraphify?: boolean;
+  architectureGuard?: boolean;
 }
 
 export interface FileGuardrailSection {
@@ -203,6 +208,88 @@ function suggestedTests(filePath: string, pages: WikiPage[]): string[] {
   ];
 }
 
+function graphifyItems(
+  filePath: string,
+  context: GraphifyContext | undefined
+): string[] {
+  if (!context) {
+    return [];
+  }
+
+  const relatedFiles = context.files.filter((file) => {
+    return file === filePath || file.endsWith(`/${filePath}`) || filePath.endsWith(file);
+  });
+  const relatedEdges = context.edges
+    .filter((edge) => edge.from.includes(filePath) || edge.to.includes(filePath))
+    .slice(0, 8)
+    .map((edge) => {
+      const details = [
+        edge.type ? `type ${edge.type}` : undefined,
+        edge.confidence ? `confidence ${edge.confidence}` : undefined
+      ].filter(Boolean);
+      return `${edge.from} -> ${edge.to}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
+    });
+
+  const items = [
+    `Available: ${context.available ? "yes" : "no"}.`,
+    ...context.warnings.map((warning) => `Warning: ${warning}`),
+    ...relatedFiles.map((file) => `Related file reference: ${file}.`),
+    ...relatedEdges.map((edge) => `Related relation: ${edge}.`)
+  ];
+
+  return items.length > 1 || context.available
+    ? items
+    : ["Graphify context requested, but no Graphify output was found."];
+}
+
+function architectureGuardItems(
+  filePath: string,
+  modules: string[],
+  configuredRiskFiles: string[]
+): string[] {
+  const normalized = filePath.toLowerCase();
+  const matchedRiskKeywords = RISK_FILE_KEYWORDS.filter((keyword) =>
+    normalized.includes(keyword)
+  );
+  const isRouteOrController = /(^|\/)(route|controller|handler|api)(\.|\/|-)/u.test(
+    normalized
+  );
+  const isConfiguredRiskFile = configuredRiskFiles.some((riskFile) => {
+    const risk = riskFile.toLowerCase();
+    return normalized === risk || normalized.endsWith(`/${risk}`) || risk.endsWith(normalized);
+  });
+  const testHints = [
+    matchedRiskKeywords.some((keyword) => ["webhook", "payment", "billing", "stripe"].includes(keyword))
+      ? "webhooks, billing/payment state transitions, and idempotency"
+      : undefined,
+    matchedRiskKeywords.some((keyword) => ["auth", "permission", "rbac", "role", "security"].includes(keyword))
+      ? "auth, permission, and security boundaries"
+      : undefined,
+    matchedRiskKeywords.some((keyword) => ["migration", "schema"].includes(keyword))
+      ? "migration rollback and schema compatibility"
+      : undefined
+  ].filter((item): item is string => Boolean(item));
+
+  return [
+    modules.length > 0
+      ? `Likely modules: ${modules.join(", ")}.`
+      : "Likely modules: none detected from matched memory.",
+    matchedRiskKeywords.length > 0 || isConfiguredRiskFile
+      ? `High-risk signals: ${[
+          ...matchedRiskKeywords,
+          isConfiguredRiskFile ? "configured risk file" : undefined
+        ].filter(Boolean).join(", ")}.`
+      : "High-risk signals: none detected from path or config.",
+    isRouteOrController
+      ? "Route/controller boundary: keep request parsing and response mapping here; move durable business logic into services or adapters."
+      : "Boundary check: keep this file focused and avoid mixing provider calls, persistence, UI, and configuration concerns.",
+    testHints.length > 0
+      ? `Focused tests should cover ${testHints.join(", ")}.`
+      : "Focused tests should cover state transitions, webhooks, auth, migrations, or billing if this file touches those domains.",
+    "This architecture guard is advisory and must not automatically refactor code or block the task."
+  ];
+}
+
 function formatSection(section: FileGuardrailSection): string {
   return `## ${section.title}\n${section.items.map((item) => `- ${item}`).join("\n")}`;
 }
@@ -225,7 +312,7 @@ export async function generateFileGuardrails(
   filePath: string,
   options: FileGuardrailsOptions = {}
 ): Promise<FileGuardrailsResult> {
-  await loadAIWikiConfig(rootDir);
+  const config = await loadAIWikiConfig(rootDir);
   const normalizedFile = normalizeTargetFile(rootDir, filePath);
   const exactPages = await findWikiPages(rootDir, { file: normalizedFile });
   const search = await searchWikiMemory(rootDir, pathSearchQuery(normalizedFile), {
@@ -246,6 +333,9 @@ export async function generateFileGuardrails(
   const pitfallPages = pagesOfType(pages, "pitfall");
   const decisionPages = pagesOfType(pages, "decision");
   const suggestedFileNote = `wiki/files/${slugForFileNote(normalizedFile)}.md`;
+  const graphify = options.withGraphify
+    ? await loadGraphifyContext(rootDir)
+    : undefined;
 
   const guardrails: FileGuardrails = {
     filePath: normalizedFile,
@@ -275,6 +365,22 @@ export async function generateFileGuardrails(
           "No matching decision pages found."
         )
       },
+      ...(options.withGraphify
+        ? [
+            {
+              title: "Graphify Structural Context",
+              items: graphifyItems(normalizedFile, graphify)
+            }
+          ]
+        : []),
+      ...(options.architectureGuard
+        ? [
+            {
+              title: "Architecture Guard",
+              items: architectureGuardItems(normalizedFile, modules, config.riskFiles)
+            }
+          ]
+        : []),
       {
         title: "Suggested Tests",
         items: suggestedTests(normalizedFile, pages)

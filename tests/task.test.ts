@@ -179,5 +179,61 @@ describe("AIWiki task continuity", () => {
     const resume = await resumeTask(rootDir);
     expect(resume.markdown).toContain("MVP keeps task state separate");
     expect(resume.markdown).toContain("Need user confirmation");
+
+    const status = await getTaskStatus(rootDir);
+    expect(status.markdown).toContain("## Decisions");
+    expect(status.markdown).toContain("MVP keeps task state separate");
+    expect(status.markdown).toContain("## Checkpoints");
+    expect(status.markdown).toContain("decision");
+    expect(status.markdown).toContain("blocker");
+  });
+
+  it("derives status and resume from checkpoint events instead of edited markdown summaries", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Event source task", { id: "event-source-task" });
+
+    await checkpointTask(rootDir, {
+      message: "Event-backed checkpoint",
+      status: "done",
+      tests: ["event test passed"],
+      next: ["continue from event log"]
+    });
+    await recordTaskDecision(rootDir, "Use JSONL as task source of truth");
+    await writeFile(
+      path.join(rootDir, ".aiwiki", "tasks", "event-source-task", "progress.md"),
+      "# Progress\n\n## Completed\n- User edited stale progress\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, ".aiwiki", "tasks", "event-source-task", "decisions.md"),
+      "# Decisions\n\n- User edited stale decision\n",
+      "utf8"
+    );
+
+    const status = await getTaskStatus(rootDir);
+    const resume = await resumeTask(rootDir);
+
+    expect(status.markdown).toContain("Event-backed checkpoint");
+    expect(status.markdown).toContain("Use JSONL as task source of truth");
+    expect(status.markdown).not.toContain("User edited stale");
+    expect(resume.markdown).toContain("event test passed");
+    expect(resume.markdown).toContain("continue from event log");
+    expect(resume.markdown).not.toContain("User edited stale");
+  });
+
+  it("reports corrupt task event logs with task id and line number", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Corrupt events", { id: "corrupt-events" });
+    await writeFile(
+      path.join(rootDir, ".aiwiki", "tasks", "corrupt-events", "checkpoints.jsonl"),
+      "{\"time\":\"2026-04-29T00:00:00.000Z\",\"type\":\"checkpoint\"}\n{not json}\n",
+      "utf8"
+    );
+
+    await expect(getTaskStatus(rootDir)).rejects.toThrow(
+      "Corrupt task event log for corrupt-events: line 2"
+    );
   });
 });

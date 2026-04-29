@@ -171,7 +171,7 @@ node dist/cli.js guard src/example.ts
 优先顺序：
 
 1. 实现 `aiwiki reflect --from-git-diff` 的 no-LLM preview。
-2. 实现 git diff 读取和最近相关 wiki pages 检索。
+2. 实现 git diff 读取和相关 wiki pages 检索。
 3. 生成结构化更新建议，但默认不写入。
 4. 实现 `aiwiki ingest <file>`，先保留 raw source，再生成结构化建议。
 5. 在进入自动写入前补齐通用 preview / confirmation 流程。

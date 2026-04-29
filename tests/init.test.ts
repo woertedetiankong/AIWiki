@@ -26,6 +26,23 @@ describe("initAIWiki", () => {
     expect(config.projectName).toBe("demo");
     expect(config.provider).toBe("none");
     expect(config.ignore).toContain(".env*");
+
+    const graph = JSON.parse(
+      await readFile(path.join(rootDir, ".aiwiki", "graph", "graph.json"), "utf8")
+    ) as { version?: string; generated_at?: string; nodes?: unknown[]; edges?: unknown[] };
+    const backlinks = JSON.parse(
+      await readFile(
+        path.join(rootDir, ".aiwiki", "graph", "backlinks.json"),
+        "utf8"
+      )
+    ) as { version?: string; generated_at?: string; backlinks?: Record<string, unknown> };
+    expect(graph.version).toBe("0.1.0");
+    expect(typeof graph.generated_at).toBe("string");
+    expect(graph.nodes).toEqual([]);
+    expect(graph.edges).toEqual([]);
+    expect(backlinks.version).toBe("0.1.0");
+    expect(typeof backlinks.generated_at).toBe("string");
+    expect(backlinks.backlinks).toEqual({});
   });
 
   it("does not overwrite existing files on repeated init", async () => {

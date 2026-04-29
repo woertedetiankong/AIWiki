@@ -4,7 +4,8 @@ import { applyWikiUpdatePlan, readWikiUpdatePlanFile } from "./apply.js";
 import { generateArchitectureAudit } from "./architecture.js";
 import { generateDevelopmentBrief } from "./brief.js";
 import { AIWIKI_VERSION } from "./constants.js";
-import { buildWikiGraph } from "./graph.js";
+import { buildWikiGraph, relateGraphFile } from "./graph.js";
+import { importGraphifyContext } from "./graphify.js";
 import { generateFileGuardrails } from "./guard.js";
 import { initAIWiki } from "./init.js";
 import {
@@ -16,7 +17,9 @@ import { generateIngestPreview } from "./ingest.js";
 import { lintWiki } from "./lint.js";
 import {
   exportModulePack,
-  generateModuleImportPreview
+  generateModuleImportPreview,
+  generateModuleMemoryBrief,
+  lintModuleMemory
 } from "./module-pack.js";
 import { generateProjectMap } from "./project-map.js";
 import { generateRulePromotionPreview } from "./promote-rules.js";
@@ -130,6 +133,8 @@ program
   .option("--output <path>", "Write the brief to a project-local file")
   .option("--force", "Overwrite the output file if it already exists", false)
   .option("--format <format>", "Output format: markdown or json", "markdown")
+  .option("--with-graphify", "Include graphify-out structural context when available", false)
+  .option("--architecture-guard", "Include explicit architecture guard signals", false)
   .action(
     async (
       task: string,
@@ -138,6 +143,8 @@ program
         output?: string;
         force?: boolean;
         format?: string;
+        withGraphify?: boolean;
+        architectureGuard?: boolean;
       }
     ) => {
       const format = parseOutputFormat(options.format);
@@ -145,7 +152,9 @@ program
         limit: parsePositiveInteger(options.limit),
         output: options.output,
         force: options.force,
-        format
+        format,
+        withGraphify: options.withGraphify,
+        architectureGuard: options.architectureGuard
       });
 
       if (result.outputPath) {
@@ -163,14 +172,23 @@ program
   .argument("<file>", "Project-local file path")
   .option("--limit <n>", "Maximum number of related pages to search")
   .option("--format <format>", "Output format: markdown or json", "markdown")
+  .option("--with-graphify", "Include graphify-out structural context when available", false)
+  .option("--architecture-guard", "Include explicit architecture guard signals", false)
   .action(
     async (
       file: string,
-      options: { limit?: string; format?: string }
+      options: {
+        limit?: string;
+        format?: string;
+        withGraphify?: boolean;
+        architectureGuard?: boolean;
+      }
     ) => {
       const format = parseOutputFormat(options.format);
       const result = await generateFileGuardrails(process.cwd(), file, {
-        limit: parsePositiveInteger(options.limit)
+        limit: parsePositiveInteger(options.limit),
+        withGraphify: options.withGraphify,
+        architectureGuard: options.architectureGuard
       });
 
       process.stdout.write(format === "json" ? result.json : result.markdown);
@@ -243,6 +261,7 @@ moduleCommand
   .command("import")
   .description("Preview importing a portable module pack into this project.")
   .argument("<pack>", "Path to a module pack JSON file")
+  .option("--as <module>", "Import the pack under a safe target module name")
   .option("--target-stack <stack>", "Target project stack or framework")
   .option("--output-plan <path>", "Write an AIWiki update plan draft to a project-local JSON file")
   .option("--force", "Overwrite the output plan if it already exists", false)
@@ -251,6 +270,7 @@ moduleCommand
     async (
       pack: string,
       options: {
+        as?: string;
         targetStack?: string;
         outputPlan?: string;
         force?: boolean;
@@ -259,6 +279,7 @@ moduleCommand
     ) => {
       const format = parseOutputFormat(options.format);
       const result = await generateModuleImportPreview(process.cwd(), pack, {
+        as: options.as,
         targetStack: options.targetStack,
         outputPlan: options.outputPlan,
         force: options.force
@@ -266,6 +287,35 @@ moduleCommand
       process.stdout.write(format === "json" ? result.json : result.markdown);
     }
   );
+
+moduleCommand
+  .command("brief")
+  .description("Generate a module-specific brief for adapting memory to a task.")
+  .argument("<module>", "Module name")
+  .argument("<task>", "Task description")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      moduleName: string,
+      task: string,
+      options: { format?: string }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await generateModuleMemoryBrief(process.cwd(), moduleName, task);
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+moduleCommand
+  .command("lint")
+  .description("Check module memory portability and promotion risks.")
+  .argument("<module>", "Module name")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (moduleName: string, options: { format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await lintModuleMemory(process.cwd(), moduleName);
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
 
 program
   .command("reflect")
@@ -388,6 +438,45 @@ graphCommand
     console.log(`Nodes: ${result.graph.nodes.length}`);
     console.log(`Edges: ${result.graph.edges.length}`);
   });
+
+graphCommand
+  .command("import-graphify")
+  .description("Read Graphify output as temporary structural context.")
+  .argument("<path>", "Project-local graphify-out directory, GRAPH_REPORT.md, or graph.json")
+  .option("--output <path>", "Write the imported context to a project-local file")
+  .option("--force", "Overwrite the output file if it already exists", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (
+    graphifyPath: string,
+    options: { output?: string; force?: boolean; format?: string }
+  ) => {
+    const format = parseOutputFormat(options.format);
+    const result = await importGraphifyContext(process.cwd(), graphifyPath, {
+      output: options.output,
+      force: options.force,
+      format
+    });
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
+
+graphCommand
+  .command("relate")
+  .description("Summarize wiki graph relations for a project-local file.")
+  .argument("<file>", "Project-local file path")
+  .option("--with-graphify", "Include graphify-out structural context when available", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      file: string,
+      options: { withGraphify?: boolean; format?: string }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await relateGraphFile(process.cwd(), file, {
+        withGraphify: options.withGraphify
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
 
 program
   .command("promote-rules")

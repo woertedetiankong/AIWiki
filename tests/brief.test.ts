@@ -147,6 +147,34 @@ describe("generateDevelopmentBrief", () => {
     expect(result.markdown).toContain("Record reusable module decisions after implementation.");
   });
 
+  it("adds an explicit architecture guard section when requested", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addRelevantMemory(rootDir);
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "add stripe payment webhook",
+      {
+        architectureGuard: true,
+        format: "json"
+      }
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const titles = parsed.sections.map((section) => section.title);
+    const architectureGuard = parsed.sections.find(
+      (section) => section.title === "Architecture Guard"
+    );
+
+    expect(titles).toContain("Architecture Boundaries");
+    expect(titles).toContain("Architecture Guard");
+    expect(architectureGuard?.items.join("\n")).toContain("Likely modules: payment");
+    expect(architectureGuard?.items.join("\n")).toContain("billing/payment");
+    expect(result.markdown).toContain("## Architecture Guard");
+  });
+
   it("returns stable json output", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
