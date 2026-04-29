@@ -17,6 +17,9 @@ describe("loadAIWikiConfig", () => {
     await expect(loadAIWikiConfig(rootDir)).rejects.toBeInstanceOf(
       AIWikiNotInitializedError
     );
+    await expect(loadAIWikiConfig(rootDir)).rejects.toThrow(
+      "aiwiki init --project-name <name>"
+    );
   });
 
   it("merges defaults into partial config", async () => {

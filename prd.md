@@ -218,6 +218,8 @@ Acceptance criteria:
 - JSON output can remain complete, but Markdown output should be optimized for
   agent decision-making.
 - Unknown or empty states stay stable and short.
+- `brief` and `guard` provide useful read-only cold-start output before `.aiwiki/`
+  is initialized.
 - Tests pin the new section order and empty-state behavior.
 
 ### 2. Freshness / Staleness Pass

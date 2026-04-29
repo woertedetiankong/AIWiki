@@ -84,6 +84,22 @@ async function addGuardMemory(rootDir: string): Promise<void> {
 }
 
 describe("generateFileGuardrails", () => {
+  it("returns cold-start guardrails when AIWiki is not initialized", async () => {
+    const rootDir = await tempProject();
+
+    const result = await generateFileGuardrails(
+      rootDir,
+      "src/app/api/stripe/webhook/route.ts",
+      { architectureGuard: true }
+    );
+
+    expect(result.markdown).toContain("## Setup");
+    expect(result.markdown).toContain("Cold-start mode");
+    expect(result.markdown).toContain("aiwiki init --project-name <name>");
+    expect(result.markdown).toContain("## Architecture Guard");
+    expect(result.markdown).toContain("High-risk signals");
+  });
+
   it("matches related memory by file path and search context", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

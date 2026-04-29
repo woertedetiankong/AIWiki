@@ -7,7 +7,7 @@ import {
   PROJECT_SCAN_EXCLUDED_PATHS,
   INDEX_PATH
 } from "./constants.js";
-import { loadAIWikiConfig } from "./config.js";
+import { AIWikiNotInitializedError, createDefaultConfig, loadAIWikiConfig } from "./config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
 import { appendLogEntry } from "./log.js";
@@ -15,6 +15,7 @@ import type { OutputFormat } from "./output.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import type { SearchResult } from "./search.js";
 import { searchWikiMemory } from "./search.js";
+import type { AIWikiConfig } from "./types.js";
 
 export interface BriefOptions {
   limit?: number;
@@ -619,7 +620,32 @@ function firstMatchingItem(items: string[], pattern: RegExp): string | undefined
   return items.find((item) => pattern.test(item));
 }
 
+const MARKDOWN_SECTION_LIMITS: ReadonlyMap<string, number> = new Map([
+  ["Must Read", 8],
+  ["Rules", 8],
+  ["Pitfalls", 8],
+  ["Architecture Guard", 6],
+  ["Graphify Context", 8],
+  ["Other Context", 8]
+] as const);
+
+function limitMarkdownSection(section: BriefSection): BriefSection {
+  const limit = MARKDOWN_SECTION_LIMITS.get(section.title);
+  if (!limit || section.items.length <= limit) {
+    return section;
+  }
+
+  return {
+    ...section,
+    items: [
+      ...section.items.slice(0, limit),
+      `${section.items.length - limit} more item(s) omitted from markdown; use --format json for full context.`
+    ]
+  };
+}
+
 export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string {
+  const setup = sectionItems(brief, "AIWiki Setup");
   const mustRead = sectionItems(brief, "Suggested Must-Read Files");
   const discoveredDocs = removeItem(
     sectionItems(brief, "Discovered Markdown Docs"),
@@ -671,6 +697,9 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
         )
       ]
     },
+    ...(setup.length > 0
+      ? [{ title: "Setup", items: setup }]
+      : []),
     {
       title: "Do Not",
       items: [
@@ -706,7 +735,9 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
   return [
     `# Development Brief: ${brief.task}`,
     "",
-    ...sections.flatMap((section) => [formatSection(section), ""])
+    ...sections
+      .map(limitMarkdownSection)
+      .flatMap((section) => [formatSection(section), ""])
   ].join("\n").trimEnd() + "\n";
 }
 
@@ -762,12 +793,28 @@ async function appendBriefEvalCase(
   await appendFile(evalPath, `${JSON.stringify(event)}\n`, "utf8");
 }
 
+function defaultProjectName(rootDir: string): string {
+  return path.basename(path.resolve(rootDir)) || "project";
+}
+
 export async function generateDevelopmentBrief(
   rootDir: string,
   task: string,
   options: BriefOptions = {}
 ): Promise<BriefResult> {
-  const config = await loadAIWikiConfig(rootDir);
+  let initialized = true;
+  let config: AIWikiConfig;
+  try {
+    config = await loadAIWikiConfig(rootDir);
+  } catch (error) {
+    if (!(error instanceof AIWikiNotInitializedError)) {
+      throw error;
+    }
+
+    initialized = false;
+    config = createDefaultConfig(defaultProjectName(rootDir));
+  }
+
   const indexSummary = await readIndexSummary(rootDir);
   const ignorePatterns = unique([
     ...PROJECT_SCAN_EXCLUDED_PATHS,
@@ -809,9 +856,23 @@ export async function generateDevelopmentBrief(
       {
         title: "Goal",
         items: [
-          `Complete the requested task for ${config.projectName} while respecting the relevant project memory below.`
+          initialized
+            ? `Complete the requested task for ${config.projectName} while respecting the relevant project memory below.`
+            : `Prepare for ${config.projectName} with a read-only cold scan because AIWiki memory is not initialized yet.`
         ]
       },
+      ...(!initialized
+        ? [
+            {
+              title: "AIWiki Setup",
+              items: [
+                "Cold-start mode: no .aiwiki memory was loaded and no AIWiki files were written.",
+                "Run aiwiki init --project-name <name> when you are ready to keep project memory.",
+                "Then run aiwiki map --write so future briefs can use durable local context."
+              ]
+            }
+          ]
+        : []),
       {
         title: "Product Questions to Confirm",
         items: [
@@ -924,12 +985,14 @@ export async function generateDevelopmentBrief(
     ? await writeOutputFile(rootDir, options.output, content, options.force ?? false)
     : undefined;
 
-  await appendLogEntry(rootDir, {
-    action: "brief",
-    title: task,
-    bullets: selectedDocs.map((doc) => `Selected: [[${doc}]]`)
-  });
-  await appendBriefEvalCase(rootDir, task, outputPath, selectedDocs);
+  if (initialized) {
+    await appendLogEntry(rootDir, {
+      action: "brief",
+      title: task,
+      bullets: selectedDocs.map((doc) => `Selected: [[${doc}]]`)
+    });
+    await appendBriefEvalCase(rootDir, task, outputPath, selectedDocs);
+  }
 
   return { brief, markdown, json, outputPath };
 }

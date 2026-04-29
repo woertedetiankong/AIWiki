@@ -42,6 +42,23 @@ aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm
 
 `apply` previews by default. Confirmed writes only create or append supported wiki pages under `.aiwiki/wiki/`.
 
+## Codex Happy Path
+
+For a new coding session, start with the smallest useful loop:
+
+```bash
+aiwiki brief "implement the next feature"
+aiwiki guard src/path/to/file.ts
+aiwiki checkpoint --step "implemented core behavior" --status done --from-git-diff
+aiwiki resume
+aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.json
+aiwiki apply .aiwiki/context-packs/reflect-plan.json
+```
+
+`brief` and `guard` are safe to run before initialization. In that cold-start mode they perform a read-only project scan, print setup guidance, and do not create `.aiwiki/` files. Run `aiwiki init --project-name <name>` and `aiwiki map --write` when the project is ready to keep durable local memory.
+
+Most Codex sessions should only need `brief`, `guard`, `checkpoint`, `resume`, and `reflect`. The rest of the command surface is for maintaining memory, graph relations, module packs, and reviewed updates.
+
 ## Command Surface
 
 ```bash

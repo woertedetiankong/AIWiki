@@ -145,18 +145,65 @@ function pathModuleCandidates(files: string[]): string[] {
     "index",
     "server",
     "client",
-    "components"
+    "components",
+    "test",
+    "tests",
+    "spec",
+    "docs",
+    "doc",
+    "readme",
+    "prd",
+    "package"
   ]);
   return unique(
-    files.flatMap((file) => {
-      const parsed = toPosixPath(file)
-        .replace(/\.[^.]+$/u, "")
-        .split(/[/.\\_-]+/u)
-        .map((part) => part.trim().toLowerCase())
-        .filter((part) => part.length > 2 && !lowSignalParts.has(part));
-      return parsed;
-    })
+    files
+      .map((file) => moduleNameForChangedFile(file, lowSignalParts))
+      .filter((moduleName): moduleName is string => Boolean(moduleName))
   );
+}
+
+function moduleNameForChangedFile(
+  file: string,
+  lowSignalParts = new Set<string>()
+): string | undefined {
+  const parsed = toPosixPath(file)
+    .replace(/\.[^.]+$/u, "")
+    .split(/[/.\\_-]+/u)
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 2 && !lowSignalParts.has(part));
+
+  return parsed.at(-1);
+}
+
+function moduleFiles(moduleName: string, files: string[]): string[] {
+  const normalizedModule = moduleName.toLowerCase();
+  return files.filter((file) => {
+    const inferredModule = moduleNameForChangedFile(
+      file,
+      new Set([
+        "src",
+        "app",
+        "api",
+        "lib",
+        "route",
+        "page",
+        "index",
+        "server",
+        "client",
+        "components",
+        "test",
+        "tests",
+        "spec",
+        "docs",
+        "doc",
+        "readme",
+        "prd",
+        "package"
+      ])
+    );
+
+    return inferredModule === normalizedModule;
+  });
 }
 
 function relatedModules(results: SearchResult[], files: string[]): string[] {
@@ -281,17 +328,34 @@ function buildReflectUpdatePlanDraft(
     ])
   );
 
-  for (const moduleName of modules.filter((moduleName) => !existingModuleNames.has(moduleName)).slice(0, 3)) {
+  const newModuleCandidates = modules
+    .filter((moduleName) => !existingModuleNames.has(moduleName))
+    .map((moduleName) => ({
+      moduleName,
+      files: moduleFiles(moduleName, changedFiles)
+    }))
+    .sort((a, b) => {
+      if (b.files.length !== a.files.length) {
+        return b.files.length - a.files.length;
+      }
+
+      return a.moduleName.localeCompare(b.moduleName);
+    })
+    .slice(0, 3);
+
+  for (const candidate of newModuleCandidates) {
     entries.push({
       type: "module",
-      title: titleCase(moduleName),
-      slug: safeSlug(moduleName, "module"),
+      title: titleCase(candidate.moduleName),
+      slug: safeSlug(candidate.moduleName, "module"),
       source: "reflect",
-      modules: [moduleName],
-      files: changedFiles,
+      modules: [candidate.moduleName],
+      files: candidate.files,
       summary: noteSummary
         ? `Reflection candidate from recent work: ${noteSummary}.`
-        : "Reflection candidate from recent changed files."
+        : candidate.files.length > 0
+          ? `Reflection candidate for ${candidate.moduleName} from changed files: ${candidate.files.join(", ")}.`
+          : `Reflection candidate for ${candidate.moduleName} from recent changed files.`
     });
   }
 
@@ -375,15 +439,52 @@ function reflectSectionItems(preview: ReflectPreview, title: string): string[] {
   return preview.sections.find((section) => section.title === title)?.items ?? [];
 }
 
+function limitItems(items: string[], limit: number): string[] {
+  if (items.length <= limit) {
+    return items;
+  }
+
+  return [
+    ...items.slice(0, limit),
+    `${items.length - limit} more item(s) omitted from markdown; use --format json for full context.`
+  ];
+}
+
+function isLowSignalReflectFallback(item: string): boolean {
+  return (
+    item.startsWith("No matching ") ||
+    item.startsWith("No decision changes ") ||
+    item.startsWith("No rule promotion candidates ")
+  );
+}
+
+function formatDraftEntry(entry: WikiUpdatePlanEntry): string {
+  const files = entry.files && entry.files.length > 0
+    ? ` (${entry.files.slice(0, 3).join(", ")}${entry.files.length > 3 ? ", ..." : ""})`
+    : "";
+  return `${entry.type}: ${entry.title}${files}`;
+}
+
 export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
   const draftLine = preview.updatePlanDraft
     ? preview.outputPlanPath
-      ? `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Saved to ${preview.outputPlanPath}. Run \`aiwiki apply ${preview.outputPlanPath}\`, then \`aiwiki apply ${preview.outputPlanPath} --confirm\` after review.`
+      ? `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Saved to ${preview.outputPlanPath}. Run \`aiwiki apply "${preview.outputPlanPath}"\`, then \`aiwiki apply "${preview.outputPlanPath}" --confirm\` after review.`
       : `- Update plan draft entries: ${preview.updatePlanDraft.entries.length}. Save with \`--output-plan <path>\` or save the JSON output, then run \`aiwiki apply <plan.json>\` before \`--confirm\`.`
     : "- No update plan draft was generated.";
   const changedFiles = preview.changedFiles.length > 0
     ? preview.changedFiles
     : ["No changed files detected."];
+  const candidateWrites = preview.updatePlanDraft
+    ? preview.updatePlanDraft.entries.map(formatDraftEntry)
+    : [];
+  const lessons = [
+    ...reflectSectionItems(preview, "New Lessons"),
+    ...reflectSectionItems(preview, "Pitfalls to Add or Update"),
+    ...reflectSectionItems(preview, "Modules to Update"),
+    ...reflectSectionItems(preview, "Decisions to Add or Deprecate"),
+    ...reflectSectionItems(preview, "Patterns to Add or Update"),
+    ...reflectSectionItems(preview, "Rules to Promote")
+  ].filter((item) => !isLowSignalReflectFallback(item));
   const sections: ReflectSection[] = [
     {
       title: "Review First",
@@ -391,29 +492,24 @@ export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
     },
     {
       title: "Update Plan Draft",
-      items: [draftLine.replace(/^- /u, "")]
+      items: [
+        draftLine.replace(/^- /u, ""),
+        ...limitItems(candidateWrites, 5)
+      ]
     },
     {
       title: "Changed Files",
-      items: changedFiles
+      items: limitItems(changedFiles, 10)
     },
     {
       title: "Lessons to Capture",
-      items: [
-        ...reflectSectionItems(preview, "New Lessons"),
-        ...reflectSectionItems(preview, "Pitfalls to Add or Update"),
-        ...reflectSectionItems(preview, "Modules to Update"),
-        ...reflectSectionItems(preview, "Decisions to Add or Deprecate"),
-        ...reflectSectionItems(preview, "Patterns to Add or Update"),
-        ...reflectSectionItems(preview, "Rules to Promote")
-      ]
+      items: limitItems(lessons, 8)
     },
     {
       title: "Apply Safely",
       items: [
         ...reflectSectionItems(preview, "Files Changed in .aiwiki"),
         ...reflectSectionItems(preview, "Confirmed Apply Workflow"),
-        "This preview does not write structured wiki pages.",
         "Review and confirm reusable lessons before adding pitfalls, modules, decisions, patterns, or rules."
       ]
     }
@@ -491,6 +587,14 @@ export async function generateReflectPreview(
   const matchingPatterns = matchingTitles(results, "pattern");
   const matchingRules = matchingTitles(results, "rule");
   const noteSummary = firstNonEmptyLine(notes);
+  const updatePlanDraft = buildReflectUpdatePlanDraft(
+    noteSummary,
+    notes,
+    changedFiles,
+    results,
+    modules,
+    riskyFiles
+  );
 
   const preview: ReflectPreview = {
     projectName: config.projectName,
@@ -498,14 +602,7 @@ export async function generateReflectPreview(
     notesPath: options.notes,
     changedFiles,
     selectedDocs,
-    updatePlanDraft: buildReflectUpdatePlanDraft(
-      noteSummary,
-      notes,
-      changedFiles,
-      results,
-      modules,
-      riskyFiles
-    ),
+    updatePlanDraft,
     sections: [
       section(
         "Task Summary",
@@ -566,10 +663,16 @@ export async function generateReflectPreview(
       ),
       section(
         "Files Changed in .aiwiki",
-        [
-          "No structured wiki writes are planned by this preview.",
-          "Future confirmed writes should update wiki pages, index, log, and graph consistently."
-        ]
+        updatePlanDraft
+          ? [
+              `Update plan draft contains ${updatePlanDraft.entries.length} candidate wiki write(s).`,
+              "No wiki pages are written until apply --confirm.",
+              "Future confirmed writes should update wiki pages, index, log, and graph consistently."
+            ]
+          : [
+              "No structured wiki writes are planned by this preview.",
+              "Future confirmed writes should update wiki pages, index, log, and graph consistently."
+            ]
       ),
       section(
         "Confirmed Apply Workflow",

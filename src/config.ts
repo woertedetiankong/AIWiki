@@ -59,7 +59,11 @@ export const aiWikiConfigSchema = z
 export class AIWikiNotInitializedError extends Error {
   constructor(rootDir: string) {
     super(
-      `AIWiki is not initialized in ${rootDir}. Run "aiwiki init" first.`
+      [
+        `AIWiki is not initialized in ${rootDir}.`,
+        "Run aiwiki init --project-name <name> to create local project memory.",
+        "Then run aiwiki map --write so brief, guard, resume, and reflect have durable context."
+      ].join("\n")
     );
     this.name = "AIWikiNotInitializedError";
   }

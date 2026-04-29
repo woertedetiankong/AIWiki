@@ -105,6 +105,28 @@ describe("AIWiki task continuity", () => {
     expect(resume.markdown).toContain("Implement resume");
   });
 
+  it("uses the latest checkpoint next steps in resume output", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Latest next step", { id: "latest-next" });
+
+    await checkpointTask(rootDir, {
+      step: "first step",
+      status: "done",
+      next: ["stale next step"]
+    });
+    await checkpointTask(rootDir, {
+      step: "second step",
+      status: "done",
+      next: ["current next step"]
+    });
+
+    const resume = await resumeTask(rootDir);
+
+    expect(resume.markdown).toContain("current next step");
+    expect(resume.markdown).not.toContain("stale next step");
+  });
+
   it("records git diff changed files in a checkpoint", async () => {
     const rootDir = await tempProject();
     await writeProjectFile(rootDir, "src/index.ts", "export const value = 1;\n");

@@ -190,5 +190,9 @@ describe("generateProjectMap", () => {
     const output = await readFile(written.outputPath!, "utf8");
     expect(output).toContain("type: project_map");
     expect(output).toContain("# Project Map: demo");
+
+    const index = await readFile(path.join(rootDir, ".aiwiki", "index.md"), "utf8");
+    expect(index).toContain("[[wiki/project-map.md]]");
+    expect(index).not.toContain("No project map has been generated yet.");
   });
 });

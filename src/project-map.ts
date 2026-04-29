@@ -12,6 +12,7 @@ import { appendLogEntry } from "./log.js";
 import { formatMarkdown } from "./markdown.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import type { AIWikiConfig, WikiPage } from "./types.js";
+import { regenerateIndex } from "./wiki-index.js";
 import { scanWikiPages } from "./wiki-store.js";
 
 export interface ProjectMapOptions {
@@ -393,6 +394,7 @@ export async function generateProjectMap(
     : undefined;
 
   if (outputPath) {
+    await regenerateIndex(rootDir, config);
     await appendLogEntry(rootDir, {
       action: "map",
       title: "Project Map",

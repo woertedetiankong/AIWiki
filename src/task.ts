@@ -331,7 +331,10 @@ function renderProgress(checkpoints: TaskCheckpoint[]): string {
   const inProgress = checkpointEvents
     .filter((checkpoint) => checkpoint.status && !["done", "completed"].includes(checkpoint.status))
     .map(checkpointLine);
-  const next = checkpointEvents.flatMap((checkpoint) => checkpoint.next ?? []);
+  const latestNextCheckpoint = [...checkpointEvents]
+    .reverse()
+    .find((checkpoint) => checkpoint.next && checkpoint.next.length > 0);
+  const next = latestNextCheckpoint?.next ?? [];
 
   return `# Progress
 
@@ -432,7 +435,11 @@ function excerptList(markdown: string, heading: string): string[] {
     }
     if (line.trim().startsWith("- ")) {
       const item = line.trim().replace(/^- /u, "");
-      if (item !== "None yet." && item !== "None recorded.") {
+      if (
+        item !== "None yet." &&
+        item !== "None recorded." &&
+        !item.startsWith("No ")
+      ) {
         items.push(item);
       }
     }
@@ -453,6 +460,17 @@ function bulletItems(markdown: string): string[] {
         line !== "None recorded." &&
         line !== "None yet."
     );
+}
+
+function limitItems(items: string[], limit: number): string[] {
+  if (items.length <= limit) {
+    return items;
+  }
+
+  return [
+    ...items.slice(0, limit),
+    `${items.length - limit} more item(s) omitted from markdown; use --format json for full task state.`
+  ];
 }
 
 function resumeMarkdown(status: TaskStatusData): string {
@@ -478,27 +496,26 @@ function resumeMarkdown(status: TaskStatusData): string {
 ${bulletList(continueFromHere, "No next step recorded. Inspect the current git diff before editing.")}
 
 ## Next Steps
-${bulletList(next, "No next steps recorded.")}
+${bulletList(limitItems(next, 5), "No next steps recorded.")}
 
 ## Current Status
 - Task: ${status.metadata.title}
 - Task ID: ${status.metadata.id}
 - Status: ${status.metadata.status}
-- Completed: ${completed.length > 0 ? completed.join("; ") : "No completed work recorded."}
-- In Progress: ${inProgress.length > 0 ? inProgress.join("; ") : "No in-progress work recorded."}
-- Not Yet Done: ${notStarted.length > 0 ? notStarted.join("; ") : "No not-started items recorded."}
+- Last Completed: ${completed.at(-1) ?? "No completed work recorded."}
+- In Progress: ${inProgress[0] ?? "No in-progress work recorded."}
 
 ## Changed Files
-${bulletList(changed, "No changed files recorded.")}
+${bulletList(limitItems(changed, 12), "No changed files recorded.")}
 
 ## Tests
-${bulletList(tests, "No tests recorded.")}
+${bulletList(limitItems(tests, 6), "No tests recorded.")}
 
 ## Decisions
-${bulletList(decisions, "None recorded.")}
+${bulletList(limitItems(decisions, 5), "None recorded.")}
 
 ## Blockers
-${bulletList(blockers, "None recorded.")}
+${bulletList(limitItems(blockers, 5), "None recorded.")}
 
 ## Codex Instructions
 - Use this resume brief as the source of truth for the current task state.

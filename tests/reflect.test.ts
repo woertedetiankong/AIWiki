@@ -93,7 +93,8 @@ describe("generateReflectPreview", () => {
     );
     expect(result.markdown).toContain("Notes summary: Auth fix");
     expect(result.markdown).toContain("Auth route permission checks");
-    expect(result.markdown).toContain("No structured wiki writes are planned");
+    expect(result.markdown).toContain("candidate wiki write");
+    expect(result.markdown).toContain("No wiki pages are written until apply --confirm.");
     expect(result.preview.selectedDocs).toContain("wiki/pitfalls/auth-permissions.md");
     expect(result.preview.updatePlanDraft?.entries[0]).toMatchObject({
       type: "pitfall",
@@ -167,6 +168,39 @@ describe("generateReflectPreview", () => {
     );
   });
 
+  it("scopes module draft files to the inferred changed module", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "README.md", "# Demo\n");
+    await writeProjectFile(rootDir, "prd.md", "# PRD\n");
+    await writeProjectFile(rootDir, "src/brief.ts", "export const brief = 1;\n");
+    await writeProjectFile(rootDir, "src/config.ts", "export const config = 1;\n");
+    await writeProjectFile(rootDir, "tests/brief.test.ts", "export const briefTest = 1;\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+
+    await writeProjectFile(rootDir, "README.md", "# Demo\n\nUpdated docs.\n");
+    await writeProjectFile(rootDir, "src/brief.ts", "export const brief = 2;\n");
+    await writeProjectFile(rootDir, "src/config.ts", "export const config = 2;\n");
+    await writeProjectFile(rootDir, "tests/brief.test.ts", "export const briefTest = 2;\n");
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true
+    });
+
+    const entries = result.preview.updatePlanDraft?.entries ?? [];
+    const briefEntry = entries.find(
+      (entry) => entry.type === "module" && entry.modules?.includes("brief")
+    );
+    const configEntry = entries.find(
+      (entry) => entry.type === "module" && entry.modules?.includes("config")
+    );
+
+    expect(briefEntry?.files).toEqual(["src/brief.ts", "tests/brief.test.ts"]);
+    expect(briefEntry?.files).not.toContain("README.md");
+    expect(briefEntry?.files).not.toContain("src/config.ts");
+    expect(configEntry?.files).toEqual(["src/config.ts"]);
+  });
+
   it("writes an output plan draft without overwriting unless force is set", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -185,6 +219,7 @@ describe("generateReflectPreview", () => {
       path.join(rootDir, ".aiwiki/context-packs/reflect-plan.json")
     );
     expect(result.markdown).toContain("aiwiki apply");
+    expect(result.markdown).toContain('aiwiki apply "');
     const plan = JSON.parse(
       await readFile(
         path.join(rootDir, ".aiwiki/context-packs/reflect-plan.json"),

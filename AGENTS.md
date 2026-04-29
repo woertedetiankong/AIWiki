@@ -44,6 +44,16 @@ This project is a local-first AI coding memory tool. Code should be written like
 - Prefer temp directories for filesystem tests. Do not depend on the developer's real `.aiwiki/`.
 - Run `npm run typecheck`, `npm run test`, and `npm run build` before considering implementation complete.
 
+## Dogfood Workflow
+
+- When changing Codex-facing workflows, test AIWiki on this repository before calling the work done.
+- Prefer a tight loop: run `aiwiki brief "<task>"`, inspect whether the output helps implementation, edit the smallest useful improvement, then run the command again.
+- For file-specific changes, run `aiwiki guard <file>` and verify the output is short, relevant, and actionable.
+- For task-continuity changes, run `aiwiki checkpoint` and `aiwiki resume` and verify the resume brief starts with the true next action.
+- For memory-capture changes, run `aiwiki reflect --from-git-diff --output-plan <path>` and `aiwiki apply <path>` as a preview. Do not use `--confirm` unless the candidate memory has been reviewed.
+- Treat dogfood findings as product feedback: if CLI output is noisy, misleading, stale, or hard to copy into Codex, fix the workflow or document the limitation.
+- Keep generated runtime artifacts out of commits unless they are stable project memory. Eval logs, graph outputs, context-pack drafts, and task run state are local artifacts by default.
+
 ## Style
 
 - Use TypeScript strict mode and exported types for public internal APIs.

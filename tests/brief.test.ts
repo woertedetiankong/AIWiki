@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { AIWikiNotInitializedError } from "../src/config.js";
 import { initAIWiki } from "../src/init.js";
 import { writeMarkdownFile } from "../src/markdown.js";
 import { generateDevelopmentBrief } from "../src/brief.js";
@@ -59,12 +58,21 @@ async function addRelevantMemory(rootDir: string): Promise<void> {
 }
 
 describe("generateDevelopmentBrief", () => {
-  it("throws a clear error when AIWiki is not initialized", async () => {
+  it("generates a read-only cold-start brief when AIWiki is not initialized", async () => {
     const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "src", "billing-webhook.ts"),
+      "export function billingWebhook() { return 'stripe webhook'; }\n",
+      "utf8"
+    );
 
-    await expect(
-      generateDevelopmentBrief(rootDir, "stripe webhook")
-    ).rejects.toBeInstanceOf(AIWikiNotInitializedError);
+    const result = await generateDevelopmentBrief(rootDir, "stripe webhook");
+
+    expect(result.markdown).toContain("## Setup");
+    expect(result.markdown).toContain("Cold-start mode");
+    expect(result.markdown).toContain("aiwiki init --project-name <name>");
+    expect(result.markdown).toContain("src/billing-webhook.ts");
   });
 
   it("generates a no-LLM brief with relevant memory sections", async () => {
@@ -123,6 +131,12 @@ describe("generateDevelopmentBrief", () => {
       rootDir,
       "add stripe payment provider webhook"
     );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const moduleMemory = parsed.sections.find(
+      (section) => section.title === "Module Memory to Maintain"
+    );
 
     expect(result.markdown).toContain("## Other Context");
     expect(result.markdown).toContain("payment");
@@ -132,7 +146,8 @@ describe("generateDevelopmentBrief", () => {
     expect(result.markdown).toContain("pricing");
     expect(result.markdown).toContain("src/app/api/stripe/webhook/route.ts");
     expect(result.markdown).toContain("Large file");
-    expect(result.markdown).toContain("reflect");
+    expect(result.markdown).toContain("more item(s) omitted from markdown");
+    expect(moduleMemory?.items.join("\n")).toContain("reflect");
   });
 
   it("keeps architecture guidance stable when no project risks are detected", async () => {
@@ -152,7 +167,10 @@ describe("generateDevelopmentBrief", () => {
     expect(sectionTitles).toContain("Portability Checklist");
     expect(sectionTitles).toContain("Module Memory to Maintain");
     expect(result.markdown).toContain("No large-file structure warnings detected.");
-    expect(result.markdown).toContain("Record reusable module decisions after implementation.");
+    expect(result.markdown).toContain("more item(s) omitted from markdown");
+    expect(parsed.sections.find(
+      (section) => section.title === "Module Memory to Maintain"
+    )?.items.join("\n")).toContain("Record reusable module decisions after implementation.");
   });
 
   it("discovers task-matching source entry files for cold-start projects", async () => {
@@ -192,6 +210,35 @@ describe("generateDevelopmentBrief", () => {
     expect(discovered?.items.join("\n")).toContain("lib/appearance.ts");
     expect(discovered?.items.join("\n")).not.toContain(".wrangler");
     expect(result.markdown).toContain("components/NovelEditor.tsx");
+  });
+
+  it("keeps markdown briefs compact while preserving full JSON context", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+
+    for (let index = 0; index < 12; index += 1) {
+      await writeFile(
+        path.join(rootDir, "src", `CodexFeature${index}.ts`),
+        "export const codexFeature = true;\n",
+        "utf8"
+      );
+    }
+
+    const result = await generateDevelopmentBrief(
+      rootDir,
+      "improve codex feature discovery"
+    );
+    const parsed = JSON.parse(result.json) as {
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const discovered = parsed.sections.find(
+      (section) => section.title === "Discovered Entry Files"
+    );
+
+    expect(result.markdown).toContain("more item(s) omitted from markdown");
+    expect(result.markdown).toContain("--format json");
+    expect(discovered?.items.length).toBeGreaterThan(8);
   });
 
   it("discovers task-matching markdown docs for document cleanup tasks", async () => {

@@ -1,11 +1,11 @@
 import path from "node:path";
 import { RISK_FILE_KEYWORDS } from "./constants.js";
-import { loadAIWikiConfig } from "./config.js";
+import { AIWikiNotInitializedError, createDefaultConfig, loadAIWikiConfig } from "./config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
-import type { RiskLevel, WikiPage, WikiPageType } from "./types.js";
+import type { AIWikiConfig, RiskLevel, WikiPage, WikiPageType } from "./types.js";
 import { findWikiPages } from "./wiki-store.js";
 
 export interface FileGuardrailsOptions {
@@ -61,6 +61,10 @@ function slugForFileNote(filePath: string): string {
     .replace(/[^a-zA-Z0-9]+/gu, "-")
     .replace(/^-|-$/gu, "")
     .toLowerCase();
+}
+
+function defaultProjectName(rootDir: string): string {
+  return path.basename(path.resolve(rootDir)) || "project";
 }
 
 function titleForPage(page: WikiPage): string {
@@ -310,6 +314,7 @@ function withoutFallback(items: string[], fallback: string): string[] {
 }
 
 export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string {
+  const setup = sectionItems(guardrails, "AIWiki Setup");
   const architectureGuard = sectionItems(guardrails, "Architecture Guard");
   const graphify = sectionItems(guardrails, "Graphify Structural Context");
   const relatedModules = sectionItems(guardrails, "Related Modules").filter(
@@ -336,6 +341,9 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
         "Do not promote new rules from this edit without user confirmation."
       ]
     },
+    ...(setup.length > 0
+      ? [{ title: "Setup", items: setup }]
+      : []),
     {
       title: "Rules",
       items: stableItems(rules, "No matching rules found.")
@@ -385,7 +393,19 @@ export async function generateFileGuardrails(
   filePath: string,
   options: FileGuardrailsOptions = {}
 ): Promise<FileGuardrailsResult> {
-  const config = await loadAIWikiConfig(rootDir);
+  let initialized = true;
+  let config: AIWikiConfig;
+  try {
+    config = await loadAIWikiConfig(rootDir);
+  } catch (error) {
+    if (!(error instanceof AIWikiNotInitializedError)) {
+      throw error;
+    }
+
+    initialized = false;
+    config = createDefaultConfig(defaultProjectName(rootDir));
+  }
+
   const normalizedFile = normalizeTargetFile(rootDir, filePath);
   const exactPages = await findWikiPages(rootDir, { file: normalizedFile });
   const search = await searchWikiMemory(rootDir, pathSearchQuery(normalizedFile), {
@@ -415,6 +435,17 @@ export async function generateFileGuardrails(
     matchedDocs: pages.map(docPath),
     suggestedFileNote,
     sections: [
+      ...(!initialized
+        ? [
+            {
+              title: "AIWiki Setup",
+              items: [
+                "Cold-start mode: no .aiwiki memory was loaded and no AIWiki files were written.",
+                "Run aiwiki init --project-name <name> and aiwiki map --write when you are ready to keep project memory."
+              ]
+            }
+          ]
+        : []),
       {
         title: "Related Modules",
         items: fallback(modules, "No related module pages found.")

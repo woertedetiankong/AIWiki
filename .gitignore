@@ -2,3 +2,13 @@ node_modules/
 dist/
 .DS_Store
 .env*
+
+# AIWiki runtime/session outputs. Keep durable .aiwiki config, prompts, index,
+# and reviewed wiki pages versionable; keep local evals, task runs, graph
+# snapshots, and generated update plans out of normal commits.
+.aiwiki/context-packs/*.json
+.aiwiki/evals/*.jsonl
+.aiwiki/graph/*.json
+.aiwiki/log.md
+.aiwiki/tasks/active-task
+.aiwiki/tasks/*/
