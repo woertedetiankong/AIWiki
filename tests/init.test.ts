@@ -89,6 +89,8 @@ describe("initAIWiki", () => {
     );
     expect(await readFile(promptPath, "utf8")).toContain("module boundaries");
     expect(await readFile(agentsPath, "utf8")).toContain("Do not hardcode");
+    expect(await readFile(agentsPath, "utf8")).toContain("aiwiki codex");
+    expect(await readFile(agentsPath, "utf8")).toContain("The user should not need to remember AIWiki commands");
     expect(await readFile(logPath, "utf8")).toBe("custom log\n");
 
     const config = await loadAIWikiConfig(rootDir);

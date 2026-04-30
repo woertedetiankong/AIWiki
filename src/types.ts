@@ -41,6 +41,10 @@ export interface AIWikiConfig {
   ignore: string[];
   riskFiles: string[];
   highRiskModules: string[];
+  architectureAudit: {
+    ignorePaths: string[];
+    ignoreLiteralPatterns: string[];
+  };
 }
 
 export interface WikiPageFrontmatter {

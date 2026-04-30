@@ -1,8 +1,19 @@
+import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { RISK_FILE_KEYWORDS } from "./constants.js";
+import {
+  ARCHITECTURE_LARGE_FILE_LINE_THRESHOLD,
+  ARCHITECTURE_SOURCE_FILE_EXTENSIONS,
+  PROJECT_SCAN_EXCLUDED_PATHS,
+  RISK_FILE_KEYWORDS
+} from "./constants.js";
 import { AIWikiNotInitializedError, createDefaultConfig, loadAIWikiConfig } from "./config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
+import {
+  collectProjectIgnoreRules,
+  shouldIgnorePath
+} from "./ignore.js";
+import type { IgnoreRule } from "./ignore.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { searchWikiMemory } from "./search.js";
 import {
@@ -28,6 +39,16 @@ export interface FileGuardrails {
   filePath: string;
   matchedDocs: string[];
   suggestedFileNote: string;
+  fileNoteRecommended: boolean;
+  suggestedTests: string[];
+  relatedFiles: string[];
+  fileSignals: {
+    exists: boolean;
+    lines?: number;
+    large: boolean;
+    importedBy: string[];
+    imports: string[];
+  };
   stalenessWarnings?: WikiStalenessWarning[];
   sections: FileGuardrailSection[];
 }
@@ -98,6 +119,136 @@ function firstBodyLine(page: WikiPage): string | undefined {
 
 function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function isSourceFile(relativePath: string): boolean {
+  const extension = path.posix.extname(toPosixPath(relativePath));
+  return ARCHITECTURE_SOURCE_FILE_EXTENSIONS.includes(
+    extension as (typeof ARCHITECTURE_SOURCE_FILE_EXTENSIONS)[number]
+  );
+}
+
+async function walkProjectFiles(
+  rootDir: string,
+  ignoreRules: readonly IgnoreRule[],
+  currentDir = rootDir
+): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(currentDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+
+    throw error;
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    const relativePath = toPosixPath(path.relative(rootDir, fullPath)).replace(/^\.\//u, "");
+    if (shouldIgnorePath(relativePath, ignoreRules)) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      files.push(...(await walkProjectFiles(rootDir, ignoreRules, fullPath)));
+    } else if (entry.isFile()) {
+      files.push(relativePath);
+    }
+  }
+
+  return files.sort();
+}
+
+function lineCount(content: string): number {
+  return content.length === 0 ? 0 : content.split("\n").length;
+}
+
+function basenameWithoutExtension(filePath: string): string {
+  return path.posix.basename(filePath, path.posix.extname(filePath)).toLowerCase();
+}
+
+function isTestFile(filePath: string): boolean {
+  const normalized = filePath.toLowerCase();
+  return normalized.startsWith("tests/") ||
+    normalized.includes("/tests/") ||
+    /(?:^|\/)(?:test_|.+\.(?:test|spec)\.)/u.test(normalized);
+}
+
+function likelyTestFiles(filePath: string, files: string[]): string[] {
+  const base = basenameWithoutExtension(filePath);
+  return files
+    .filter(isTestFile)
+    .filter((candidate) => basenameWithoutExtension(candidate).includes(base))
+    .slice(0, 5);
+}
+
+function importTargetCandidates(filePath: string): string[] {
+  const withoutExtension = filePath.replace(/\.[^.]+$/u, "");
+  return [withoutExtension, `../${withoutExtension}`, `./${path.posix.basename(withoutExtension)}`];
+}
+
+async function fileContent(rootDir: string, filePath: string): Promise<string> {
+  return readFile(resolveProjectPath(rootDir, filePath), "utf8");
+}
+
+async function importingFiles(
+  rootDir: string,
+  filePath: string,
+  files: string[]
+): Promise<string[]> {
+  const candidates = importTargetCandidates(filePath);
+  const importers: string[] = [];
+  for (const candidate of files.filter(isSourceFile)) {
+    if (candidate === filePath) {
+      continue;
+    }
+
+    const content = await fileContent(rootDir, candidate);
+    if (candidates.some((target) => content.includes(target))) {
+      importers.push(candidate);
+    }
+  }
+
+  return importers.slice(0, 8);
+}
+
+function importedPathsFromContent(content: string): string[] {
+  const imports = [...content.matchAll(/\bfrom\s+["']([^"']+)["']|import\(["']([^"']+)["']\)/gu)]
+    .map((match) => match[1] ?? match[2])
+    .filter((value): value is string => Boolean(value));
+  return unique(imports).slice(0, 8);
+}
+
+async function fileSignals(
+  rootDir: string,
+  filePath: string,
+  files: string[]
+): Promise<FileGuardrails["fileSignals"]> {
+  try {
+    const fileStat = await stat(resolveProjectPath(rootDir, filePath));
+    if (!fileStat.isFile()) {
+      return { exists: false, large: false, importedBy: [], imports: [] };
+    }
+
+    const content = await fileContent(rootDir, filePath);
+    const lines = lineCount(content);
+    return {
+      exists: true,
+      lines,
+      large: lines >= ARCHITECTURE_LARGE_FILE_LINE_THRESHOLD,
+      importedBy: await importingFiles(rootDir, filePath, files),
+      imports: importedPathsFromContent(content)
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return { exists: false, large: false, importedBy: [], imports: [] };
+    }
+
+    throw error;
+  }
 }
 
 function docPath(page: WikiPage): string {
@@ -203,9 +354,11 @@ function requiredChecks(filePath: string, pages: WikiPage[]): string[] {
   return checks;
 }
 
-function suggestedTests(filePath: string, pages: WikiPage[]): string[] {
+function suggestedTests(filePath: string, pages: WikiPage[], detectedTests: string[]): string[] {
+  const exactTestItems = detectedTests.map((testFile) => `Run \`npm run test -- ${testFile}\`.`);
   if (pages.length === 0) {
     return [
+      ...exactTestItems,
       `Run the relevant project tests after editing ${filePath}.`,
       "Add a focused regression test if this file gains behavior with lasting constraints."
     ];
@@ -213,9 +366,39 @@ function suggestedTests(filePath: string, pages: WikiPage[]): string[] {
 
   const modules = relatedModules(pages);
   return [
+    ...exactTestItems,
     `Run tests covering ${filePath}${modules.length > 0 ? ` and modules: ${modules.join(", ")}` : ""}.`,
     "Add or update focused regression tests for any listed high-severity pitfall touched by the edit."
   ];
+}
+
+function relatedImplementationFiles(filePath: string, pages: WikiPage[], fileImports: string[]): string[] {
+  const pageFiles = pages.flatMap((page) => page.frontmatter.files ?? []);
+  return unique([...pageFiles, ...fileImports])
+    .filter((file) => file !== filePath)
+    .slice(0, 10);
+}
+
+function fileSignalItems(signals: FileGuardrails["fileSignals"]): string[] {
+  if (!signals.exists) {
+    return ["Target file does not exist yet; treat guard output as creation guidance."];
+  }
+
+  return [
+    signals.lines !== undefined ? `Target file has ${signals.lines} line(s).` : undefined,
+    signals.large ? "Target file is large; prefer narrow edits or extraction over adding broad responsibilities." : undefined,
+    signals.importedBy.length > 0
+      ? `Imported by: ${signals.importedBy.join(", ")}.`
+      : "No importing source files detected from static scan."
+  ].filter((item): item is string => Boolean(item));
+}
+
+function shouldRecommendFileNote(filePath: string, pages: WikiPage[], signals: FileGuardrails["fileSignals"]): boolean {
+  if (pages.length > 0) {
+    return false;
+  }
+
+  return signals.large || isSourceFile(filePath);
 }
 
 function graphifyItems(
@@ -339,6 +522,11 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
     sectionItems(guardrails, "Related Decisions"),
     "No matching decision pages found."
   );
+  const fileSignals = sectionItems(guardrails, "File Signals");
+  const relatedFiles = withoutFallback(
+    sectionItems(guardrails, "Related Files"),
+    "No related implementation files detected."
+  );
   const sections: FileGuardrailSection[] = [
     {
       title: "Do Not",
@@ -382,6 +570,10 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
       items: stableItems(sectionItems(guardrails, "Suggested Tests"), "Run relevant project tests.")
     },
     {
+      title: "File Signals",
+      items: stableItems(fileSignals, "No file signals detected.")
+    },
+    {
       title: "Related Decisions",
       items: stableItems(decisions, "No matching decisions found.")
     },
@@ -393,7 +585,13 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
       : []),
     {
       title: "Other Context",
-      items: stableItems(relatedModules, "No related modules found.")
+      items: stableItems(
+        [
+          ...relatedModules.map((item) => `Module: ${item}`),
+          ...relatedFiles.map((item) => `Related file: ${item}`)
+        ],
+        "No related modules found."
+      )
     }
   ];
 
@@ -401,7 +599,9 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
     `# File Guardrails: ${guardrails.filePath}`,
     "",
     ...sections.flatMap((section) => [formatSection(section), ""]),
-    `Suggested file note: ${guardrails.suggestedFileNote}`
+    guardrails.fileNoteRecommended
+      ? `Suggested file note: ${guardrails.suggestedFileNote}`
+      : "Suggested file note: not recommended for this target."
   ].join("\n").trimEnd() + "\n";
 }
 
@@ -428,6 +628,12 @@ export async function generateFileGuardrails(
   }
 
   const normalizedFile = normalizeTargetFile(rootDir, filePath);
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    PROJECT_SCAN_EXCLUDED_PATHS,
+    config.ignore
+  );
+  const projectFiles = await walkProjectFiles(rootDir, ignoreRules);
   const exactPages = await findWikiPages(rootDir, { file: normalizedFile });
   const search = await searchWikiMemory(rootDir, pathSearchQuery(normalizedFile), {
     limit: options.limit ?? DEFAULT_GUARD_LIMIT
@@ -448,6 +654,11 @@ export async function generateFileGuardrails(
   const pitfallPages = pagesOfType(pages, "pitfall");
   const decisionPages = pagesOfType(pages, "decision");
   const suggestedFileNote = `wiki/files/${slugForFileNote(normalizedFile)}.md`;
+  const detectedTests = likelyTestFiles(normalizedFile, projectFiles);
+  const signals = await fileSignals(rootDir, normalizedFile, projectFiles);
+  const relatedFiles = relatedImplementationFiles(normalizedFile, pages, signals.imports);
+  const testSuggestions = suggestedTests(normalizedFile, pages, detectedTests);
+  const fileNoteRecommended = shouldRecommendFileNote(normalizedFile, pages, signals);
   const graphify = options.withGraphify
     ? await loadGraphifyContext(rootDir)
     : undefined;
@@ -456,6 +667,10 @@ export async function generateFileGuardrails(
     filePath: normalizedFile,
     matchedDocs: pages.map(docPath),
     suggestedFileNote,
+    fileNoteRecommended,
+    suggestedTests: testSuggestions,
+    relatedFiles,
+    fileSignals: signals,
     stalenessWarnings,
     sections: [
       ...(!initialized
@@ -486,6 +701,14 @@ export async function generateFileGuardrails(
         items: requiredChecks(normalizedFile, pages)
       },
       {
+        title: "File Signals",
+        items: fileSignalItems(signals)
+      },
+      {
+        title: "Related Files",
+        items: fallback(relatedFiles, "No related implementation files detected.")
+      },
+      {
         title: "Related Decisions",
         items: fallback(
           decisionPages.map(pageBullet),
@@ -510,7 +733,7 @@ export async function generateFileGuardrails(
         : []),
       {
         title: "Suggested Tests",
-        items: suggestedTests(normalizedFile, pages)
+        items: testSuggestions
       }
     ]
   };

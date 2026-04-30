@@ -4,6 +4,10 @@ AIWiki is a local-first CLI for AI coding memory. It keeps project memory in `.a
 
 The current implementation is a Node.js 20+ TypeScript ESM CLI. It does not require a remote LLM provider, cloud sync, a database, MCP, or a Web UI.
 
+AIWiki is designed so users do not need to memorize every command. The intended
+workflow is: the user describes the requirement, and Codex uses AIWiki to fetch
+context, guard risky edits, and propose reviewed memory updates.
+
 ## Install
 
 ```bash
@@ -14,12 +18,23 @@ npm run build
 For local development, run commands through the source entrypoint:
 
 ```bash
-npm run dev -- <command>
+npm run dev:aiwiki -- <command>
+```
+
+The legacy `npm run dev -- <command>` form still works, but `dev:aiwiki` is the
+quietest cross-shell command to copy into agent sessions.
+
+For command options in npm scripts, put an extra `--` before options so npm does
+not consume them:
+
+```bash
+npm run dev:aiwiki -- reflect -- --from-git-diff --read-only
 ```
 
 When dogfooding the source CLI against another local project on Windows
 PowerShell, keep the target project as the current working directory and call the
-AIWiki checkout's `tsx.cmd` directly:
+AIWiki checkout's `tsx.cmd` directly. This form works with paths containing
+spaces:
 
 ```powershell
 cd D:\path\to\target-project
@@ -37,6 +52,8 @@ aiwiki <command>
 ```bash
 aiwiki init --project-name my-project
 aiwiki map --write
+aiwiki codex "implement the next feature"
+aiwiki agent "implement the next feature"
 aiwiki brief "implement the next feature"
 aiwiki guard src/example.ts
 ```
@@ -51,11 +68,23 @@ aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm
 
 `apply` previews by default. Confirmed writes only create or append supported wiki pages under `.aiwiki/wiki/`.
 
+For long-running projects, periodically check memory health:
+
+```bash
+aiwiki doctor
+```
+
+`doctor` is read-only. It summarizes lint errors, stale memory, rule promotion
+candidates, proposed/uncertain pages, deprecated pages, and next maintenance
+actions for Codex to report back to the user.
+
 ## Codex Happy Path
 
 For a new coding session, start with the smallest useful loop:
 
 ```bash
+aiwiki codex "implement the next feature"
+aiwiki agent "implement the next feature"
 aiwiki brief "implement the next feature"
 aiwiki guard src/path/to/file.ts
 aiwiki checkpoint --step "implemented core behavior" --status done --from-git-diff
@@ -80,12 +109,19 @@ Project scans combine AIWiki's built-in generated/dependency ignores, the reposi
 
 `lint`, `brief`, and `guard` surface advisory staleness warnings when wiki memory references missing files or files that changed after the page's `last_updated` value. These warnings do not block normal output.
 
-Most Codex sessions should only need `brief`, `guard`, `checkpoint`, `resume`, and `reflect`. The rest of the command surface is for maintaining memory, graph relations, module packs, and reviewed updates.
+Most Codex sessions should only need `agent`, `brief`, `guard`, `checkpoint`, `resume`, and `reflect`. The rest of the command surface is for maintaining memory, graph relations, module packs, and reviewed updates.
+
+When the user is not comfortable with CLI details, Codex should run `aiwiki codex
+"<task>"` first and follow the generated runbook. The final answer should report
+code changes, checks run, and whether AIWiki memory is current or has candidate
+updates awaiting review.
 
 ## Command Surface
 
 ```bash
 aiwiki init [--project-name <name>] [--force]
+aiwiki codex "<task>" [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
+aiwiki agent "<task>" [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
 aiwiki search "<query>" [--type <type>] [--limit <n>] [--format markdown|json]
 aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force] [--with-graphify] [--architecture-guard] [--read-only] [--format markdown|json]
 aiwiki guard <file> [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
@@ -95,6 +131,7 @@ aiwiki reflect [--from-git-diff] [--notes <path>] [--limit <n>] [--output-plan <
 aiwiki ingest <file> [--force] [--limit <n>] [--output-plan <path>] [--format markdown|json]
 aiwiki apply <plan.json> [--confirm] [--no-graph] [--format markdown|json]
 aiwiki lint [--format markdown|json]
+aiwiki doctor [--min-rule-count <n>] [--format markdown|json]
 aiwiki graph build [--format markdown|json]
 aiwiki graph import-graphify <path> [--output <path>] [--force] [--format markdown|json]
 aiwiki graph relate <file> [--with-graphify] [--format markdown|json]

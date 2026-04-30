@@ -1,4 +1,12 @@
 export {
+  formatAgentContextMarkdown,
+  generateAgentContext
+} from "./agent.js";
+export {
+  formatCodexRunbookMarkdown,
+  generateCodexRunbook
+} from "./codex.js";
+export {
   formatArchitectureAuditMarkdown,
   generateArchitectureAudit,
   generateArchitectureBriefContext
@@ -42,6 +50,10 @@ export {
   TASKS_DIR,
   WIKI_DIR
 } from "./constants.js";
+export {
+  doctorWiki,
+  formatDoctorReportMarkdown
+} from "./doctor.js";
 export {
   formatDevelopmentBriefMarkdown,
   generateDevelopmentBrief
@@ -125,6 +137,22 @@ export {
   startTask,
   TASK_FILES
 } from "./task.js";
+export type {
+  AgentContext,
+  AgentContextOptions,
+  AgentContextResult
+} from "./agent.js";
+export type {
+  CodexRunbook,
+  CodexRunbookOptions,
+  CodexRunbookResult
+} from "./codex.js";
+export type {
+  DoctorFinding,
+  DoctorOptions,
+  DoctorReport,
+  DoctorResult
+} from "./doctor.js";
 export type {
   ArchitectureAudit,
   ArchitectureAuditIssue,

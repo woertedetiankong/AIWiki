@@ -85,6 +85,52 @@ describe("generateArchitectureAudit", () => {
     expect(result.markdown).toContain("No missing module memory detected.");
   });
 
+  it("adds line evidence and avoids tokenBudget false-positive secrets", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "src/config.ts",
+      [
+        "export const tokenBudget = { brief: 8000 };",
+        "const stripeSecret = 'sk_test_123456789';"
+      ].join("\n")
+    );
+
+    const result = await generateArchitectureAudit(rootDir);
+    const parsed = JSON.parse(result.json) as {
+      issues: Array<{ severity: string; line?: number; snippet?: string; category?: string }>;
+    };
+    const secret = parsed.issues.find((issue) => issue.category === "secret");
+    const tokenBudget = parsed.issues.find((issue) => issue.snippet?.includes("tokenBudget"));
+
+    expect(secret).toMatchObject({ severity: "high", line: 2 });
+    expect(result.markdown).toContain("src/config.ts:2");
+    expect(result.markdown).toContain("Snippet:");
+    expect(tokenBudget?.severity).not.toBe("high");
+  });
+
+  it("supports architecture audit config allowlists", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await updateConfig(rootDir, {
+      architectureAudit: {
+        ignorePaths: ["src/ignored"],
+        ignoreLiteralPatterns: ["allowedSecret"]
+      }
+    });
+    await writeProjectFile(rootDir, "src/ignored/key.ts", "const key = 'sk_test_ignored';\n");
+    await writeProjectFile(rootDir, "src/allowed.ts", "const allowedSecret = 'sk_test_allowed';\n");
+    await writeProjectFile(rootDir, "src/live.ts", "const liveSecret = 'sk_test_visible';\n");
+
+    const result = await generateArchitectureAudit(rootDir);
+    const text = result.markdown;
+
+    expect(text).not.toContain("src/ignored/key.ts");
+    expect(text).not.toContain("src/allowed.ts");
+    expect(text).toContain("src/live.ts");
+  });
+
   it("exposes architecture audit through the CLI", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

@@ -2,7 +2,7 @@
 type: project_map
 title: Project Map
 status: active
-last_updated: '2026-04-29'
+last_updated: '2026-04-30'
 ---
 # Project Map: AIWiki
 
@@ -15,7 +15,16 @@ last_updated: '2026-04-29'
 - Markdown frontmatter
 
 ## Modules
-- No module pages found.
+- Apply
+- Architecture
+- Agent
+- Brief
+- Doctor
+- Guard
+- Module Pack
+- Reflect
+- Search
+- Task
 
 ## Important Directories
 - docs
@@ -23,15 +32,18 @@ last_updated: '2026-04-29'
 - tests
 
 ## High-Risk Files
-- No high-risk files detected.
+- src/apply.ts
+- src/brief.ts
+- src/guard.ts
+- src/reflect.ts
 
 ## Generated Files / Do-Not-Edit Candidates
 - package-lock.json
 
 ## Existing Rules
-- No rule pages found.
+- Local-first writes only
+- Preview-first memory updates
+- Keep command handlers thin
 
 ## Missing Module Pages
-- docs
-- src
-- tests
+- No missing module pages for current daily workflow.

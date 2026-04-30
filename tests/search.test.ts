@@ -111,4 +111,41 @@ describe("searchWikiMemory", () => {
     expect(json.query).toBe("stripe");
     expect(json.results[0]?.title).toBe("Stripe webhook raw body");
   });
+
+  it("matches Chinese titles, body text, and mixed Chinese/English queries", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), {
+      recursive: true
+    });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "codex-workflow.md"),
+      {
+        type: "module",
+        title: "Codex 编码工作流",
+        modules: ["brief"],
+        files: ["src/brief.ts"]
+      },
+      "# Codex 编码工作流\n\n这里记录中文任务、编码提示和本地 Markdown 工作流。\n"
+    );
+
+    const chinese = await searchWikiMemory(rootDir, "编码 工作流");
+    const mixed = await searchWikiMemory(rootDir, "Codex 编码 工作流");
+
+    expect(chinese.results[0]?.title).toBe("Codex 编码工作流");
+    expect(chinese.results[0]?.matchedFields).toContain("title");
+    expect(mixed.results[0]?.page.frontmatter.files).toContain("src/brief.ts");
+  });
+
+  it("keeps path-heavy English queries useful", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+
+    const response = await searchWikiMemory(
+      rootDir,
+      "src/app/api/stripe/webhook/route.ts"
+    );
+
+    expect(response.results[0]?.title).toBe("Stripe webhook raw body");
+    expect(response.results[0]?.matchedFields).toContain("frontmatter");
+  });
 });

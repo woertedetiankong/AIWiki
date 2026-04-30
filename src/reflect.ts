@@ -9,6 +9,7 @@ import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
 import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
 import type { WikiPage } from "./types.js";
+import { scanWikiPages } from "./wiki-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -227,6 +228,29 @@ function docs(results: SearchResult[]): string[] {
   return results.map((result) => `wiki/${result.page.relativePath}`);
 }
 
+function pageDoc(page: WikiPage): string {
+  return `wiki/${page.relativePath}`;
+}
+
+function normalizeWikiFileRef(filePath: string): string {
+  return toPosixPath(filePath).replace(/^\.\//u, "");
+}
+
+async function pagesReferencingChangedFiles(
+  rootDir: string,
+  changedFiles: string[]
+): Promise<WikiPage[]> {
+  if (changedFiles.length === 0) {
+    return [];
+  }
+
+  const changed = new Set(changedFiles.map(normalizeWikiFileRef));
+  const pages = await scanWikiPages(rootDir);
+  return pages.filter((page) =>
+    (page.frontmatter.files ?? []).some((fileRef) => changed.has(normalizeWikiFileRef(fileRef)))
+  );
+}
+
 function matchingTitles(results: SearchResult[], type: string): string[] {
   return results
     .filter((result) => result.page.frontmatter.type === type)
@@ -309,9 +333,18 @@ function buildReflectUpdatePlanDraft(
   changedFiles: string[],
   results: SearchResult[],
   modules: string[],
-  riskyFiles: string[]
+  riskyFiles: string[],
+  refreshPages: WikiPage[]
 ): WikiUpdatePlan | undefined {
   const entries: WikiUpdatePlanEntry[] = [];
+  for (const page of refreshPages.slice(0, 5)) {
+    entries.push(appendEntryForPage(
+      page,
+      noteSummary ?? "Refresh this memory page because referenced files changed.",
+      changedFiles
+    ));
+  }
+
   const matchedPages = pagesOfType(results, "pitfall")
     .concat(pagesOfType(results, "decision"))
     .concat(pagesOfType(results, "pattern"))
@@ -482,6 +515,7 @@ export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
     ...reflectSectionItems(preview, "New Lessons"),
     ...reflectSectionItems(preview, "Pitfalls to Add or Update"),
     ...reflectSectionItems(preview, "Modules to Update"),
+    ...reflectSectionItems(preview, "Freshness Refreshes"),
     ...reflectSectionItems(preview, "Decisions to Add or Deprecate"),
     ...reflectSectionItems(preview, "Patterns to Add or Update"),
     ...reflectSectionItems(preview, "Rules to Promote")
@@ -584,7 +618,8 @@ export async function generateReflectPreview(
       })
     : { query: "", results: [] };
   const results = search.results;
-  const selectedDocs = docs(results);
+  const refreshPages = await pagesReferencingChangedFiles(rootDir, changedFiles);
+  const selectedDocs = unique([...docs(results), ...refreshPages.map(pageDoc)]);
   const modules = relatedModules(results, changedFiles);
   const riskyFiles = highRiskChangedFiles(changedFiles);
   const matchingPitfalls = matchingTitles(results, "pitfall");
@@ -598,7 +633,8 @@ export async function generateReflectPreview(
     changedFiles,
     results,
     modules,
-    riskyFiles
+    riskyFiles,
+    refreshPages
   );
 
   const preview: ReflectPreview = {
@@ -641,8 +677,22 @@ export async function generateReflectPreview(
       section(
         "Modules to Update",
         fallback(
-          modules.map((moduleName) => `Review module summary for ${moduleName}.`),
+          [
+            ...modules.map((moduleName) => `Review module summary for ${moduleName}.`),
+            ...refreshPages
+              .filter((page) => page.frontmatter.type === "module")
+              .map((page) => `Refresh existing module memory: ${pageTitle(page)} (${pageDoc(page)}).`)
+          ],
           "No matching module updates detected."
+        )
+      ),
+      section(
+        "Freshness Refreshes",
+        fallback(
+          refreshPages.map((page) =>
+            `Refresh ${pageTitle(page)} (${pageDoc(page)}) because referenced files changed.`
+          ),
+          "No wiki pages reference the changed files."
         )
       ),
       section(

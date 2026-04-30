@@ -53,10 +53,13 @@ Note: When reading UTF-8 files in PowerShell, use Get-Content -Encoding UTF8; th
 ## Dogfood Workflow
 
 - When changing Codex-facing workflows, test AIWiki on this repository before calling the work done.
+- Users should not need to remember AIWiki commands. For non-trivial code changes, Codex should proactively run `aiwiki codex "<task>"` or `aiwiki agent "<task>"`, then run `aiwiki guard <file>` before editing concrete source files.
 - Prefer a tight loop: run `aiwiki brief "<task>"`, inspect whether the output helps implementation, edit the smallest useful improvement, then run the command again.
 - For file-specific changes, run `aiwiki guard <file>` and verify the output is short, relevant, and actionable.
 - For task-continuity changes, run `aiwiki checkpoint` and `aiwiki resume` and verify the resume brief starts with the true next action.
 - For memory-capture changes, run `aiwiki reflect --from-git-diff --output-plan <path>` and `aiwiki apply <path>` as a preview. Do not use `--confirm` unless the candidate memory has been reviewed.
+- After implementation, Codex should run `aiwiki reflect --from-git-diff --read-only`; if useful memory candidates appear, create and preview an output plan, but never confirm it without explicit user approval.
+- Run `aiwiki doctor` near the end of AIWiki-affecting tasks and report memory health next actions in the final response.
 - Treat dogfood findings as product feedback: if CLI output is noisy, misleading, stale, or hard to copy into Codex, fix the workflow or document the limitation.
 - Keep generated runtime artifacts out of commits unless they are stable project memory. Eval logs, graph outputs, context-pack drafts, and task run state are local artifacts by default.
 

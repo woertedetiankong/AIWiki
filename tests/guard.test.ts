@@ -162,6 +162,37 @@ describe("generateFileGuardrails", () => {
     expect(result.markdown).toContain("wiki/files/src-unknown.md");
   });
 
+  it("suggests nearby tests and file signals for source files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await mkdir(path.join(rootDir, "tests"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "src", "brief.ts"),
+      [
+        "import { helper } from './helper.js';",
+        "export function brief() { return helper(); }"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(path.join(rootDir, "src", "helper.ts"), "export const helper = () => true;\n", "utf8");
+    await writeFile(path.join(rootDir, "tests", "brief.test.ts"), "import '../src/brief.js';\n", "utf8");
+
+    const result = await generateFileGuardrails(rootDir, "src/brief.ts");
+    const parsed = JSON.parse(result.json) as {
+      suggestedTests: string[];
+      fileSignals: { exists: boolean; lines?: number; imports: string[] };
+      fileNoteRecommended: boolean;
+    };
+
+    expect(result.markdown).toContain("npm run test -- tests/brief.test.ts");
+    expect(result.markdown).toContain("## File Signals");
+    expect(parsed.suggestedTests.join("\n")).toContain("tests/brief.test.ts");
+    expect(parsed.fileSignals).toMatchObject({ exists: true, lines: 2 });
+    expect(parsed.fileSignals.imports).toContain("./helper.js");
+    expect(parsed.fileNoteRecommended).toBe(true);
+  });
+
   it("surfaces staleness warnings for matched file memory", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

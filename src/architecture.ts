@@ -51,6 +51,10 @@ export interface ArchitectureAuditIssue {
   title: string;
   message: string;
   path?: string;
+  line?: number;
+  snippet?: string;
+  category?: "secret" | "configuration" | "url" | "structure" | "memory";
+  evidence?: string;
 }
 
 export interface ArchitectureAudit {
@@ -203,9 +207,10 @@ function issue(
   code: ArchitectureAuditIssueCode,
   title: string,
   message: string,
-  filePath?: string
+  filePath?: string,
+  details: Partial<Pick<ArchitectureAuditIssue, "line" | "snippet" | "category" | "evidence">> = {}
 ): ArchitectureAuditIssue {
-  return { severity, code, title, message, path: filePath };
+  return { severity, code, title, message, path: filePath, ...details };
 }
 
 function largeFileIssues(files: SourceFileSummary[]): ArchitectureAuditIssue[] {
@@ -218,45 +223,112 @@ function largeFileIssues(files: SourceFileSummary[]): ArchitectureAuditIssue[] {
         "large_file",
         "Large file",
         `${file.path} has ${file.lines} lines. Split new responsibilities into focused module, service, adapter, and test files before the file becomes harder to migrate.`,
-        file.path
+        file.path,
+        { category: "structure", evidence: `${file.lines} lines` }
       )
     );
 }
 
-function hardcodedLiteralIssues(files: SourceFileSummary[]): ArchitectureAuditIssue[] {
+function compileAllowlistPatterns(patterns: readonly string[]): RegExp[] {
+  return patterns.flatMap((pattern) => {
+    try {
+      return [new RegExp(pattern, "iu")];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function isAllowedLiteral(
+  filePath: string,
+  line: string,
+  allowlistPatterns: readonly RegExp[]
+): boolean {
+  const value = `${filePath} ${line}`;
+  return allowlistPatterns.some((pattern) => pattern.test(value));
+}
+
+function hardcodedLiteralIssues(
+  files: SourceFileSummary[],
+  ignoredLiteralPatterns: readonly string[]
+): ArchitectureAuditIssue[] {
   const issues: ArchitectureAuditIssue[] = [];
-  const secretPattern = /['"`](?:sk_(?:test|live)_[^'"`]+|pk_(?:test|live)_[^'"`]+|[^'"`]*(?:secret|api[_-]?key|token)[^'"`]*)['"`]/giu;
-  const urlPattern = /['"`]https?:\/\/[^'"`]+['"`]/giu;
+  const allowlistPatterns = compileAllowlistPatterns(ignoredLiteralPatterns);
+  const providerSecretPattern = /['"`](?:sk|pk)_(?:test|live)_[^'"`\s]+['"`]/iu;
+  const namedSecretPattern = /\b(?:secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)\b\s*[:=]\s*['"`][^'"`]{8,}['"`]/iu;
+  const urlPattern = /['"`]https?:\/\/[^'"`]+['"`]/iu;
 
   for (const file of files) {
-    if (secretPattern.test(file.content)) {
-      issues.push(
-        issue(
-          "high",
-          "hardcoded_literal",
-          "Potential secret-like literal",
-          `${file.path} contains a secret-like literal. Move secrets, tokens, and provider keys behind environment/config boundaries.`,
-          file.path
-        )
-      );
-    }
-    secretPattern.lastIndex = 0;
+    const lines = file.content.split("\n");
+    lines.forEach((line, index) => {
+      if (isAllowedLiteral(file.path, line, allowlistPatterns)) {
+        return;
+      }
 
-    if (urlPattern.test(file.content)) {
-      issues.push(
-        issue(
-          "medium",
-          "hardcoded_literal",
-          "Potential hardcoded URL",
-          `${file.path} contains a URL literal. Confirm whether URLs, webhook endpoints, and provider hosts should be configurable for reuse in another project.`,
-          file.path
-        )
-      );
-    }
-    urlPattern.lastIndex = 0;
+      const snippet = line.trim().slice(0, 160);
+      const lineNumber = index + 1;
+      if (providerSecretPattern.test(line) || namedSecretPattern.test(line)) {
+        issues.push(
+          issue(
+            "high",
+            "hardcoded_literal",
+            "Potential secret-like literal",
+            `${file.path}:${lineNumber} contains a secret-like literal. Move secrets, tokens, and provider keys behind environment/config boundaries.`,
+            file.path,
+            {
+              line: lineNumber,
+              snippet,
+              category: "secret",
+              evidence: providerSecretPattern.test(line) ? "provider key pattern" : "secret-like assignment"
+            }
+          )
+        );
+        return;
+      }
+
+      if (urlPattern.test(line)) {
+        issues.push(
+          issue(
+            "medium",
+            "hardcoded_literal",
+            "Potential hardcoded URL",
+            `${file.path}:${lineNumber} contains a URL literal. Confirm whether URLs, webhook endpoints, and provider hosts should be configurable for reuse in another project.`,
+            file.path,
+            {
+              line: lineNumber,
+              snippet,
+              category: "url",
+              evidence: "URL literal"
+            }
+          )
+        );
+        return;
+      }
+
+    });
   }
 
   return issues;
+}
+
+function configuredIgnoredPaths(configuredIgnorePaths: string[]): string[] {
+  return unique(configuredIgnorePaths.map(normalizePath).filter(Boolean));
+}
+
+function filterIgnoredAuditFiles(
+  files: SourceFileSummary[],
+  configuredIgnorePaths: string[]
+): SourceFileSummary[] {
+  const ignored = configuredIgnoredPaths(configuredIgnorePaths);
+  if (ignored.length === 0) {
+    return files;
+  }
+
+  return files.filter((file) => {
+    return !ignored.some((ignoredPath) =>
+      file.path === ignoredPath || file.path.startsWith(`${ignoredPath.replace(/\/$/u, "")}/`)
+    );
+  });
 }
 
 function highRiskFileIssues(
@@ -269,7 +341,8 @@ function highRiskFileIssues(
       "high_risk_file",
       "High-risk file",
       `${filePath} matches configured or keyword-based high-risk paths. Review module boundaries, tests, and configuration before editing.`,
-      filePath
+      filePath,
+      { category: "structure", evidence: "risk file path" }
     )
   );
 }
@@ -295,7 +368,9 @@ async function missingModuleMemoryIssues(rootDir: string): Promise<ArchitectureA
         "medium",
         "missing_module_memory",
         "Missing module memory",
-        `${moduleName} is configured as high-risk but has no module page. Add module memory so future brief, guard, reflect, and migration workflows have a stable boundary to reuse.`
+        `${moduleName} is configured as high-risk but has no module page. Add module memory so future brief, guard, reflect, and migration workflows have a stable boundary to reuse.`,
+        undefined,
+        { category: "memory", evidence: "highRiskModules config" }
       )
     );
 }
@@ -320,8 +395,12 @@ function formatIssueList(
 
   return issues
     .map((item) => {
-      const target = item.path ? `${item.path}: ` : "";
-      return `- [${item.severity}] ${target}${item.message}`;
+      const location = item.path
+        ? `${item.path}${item.line ? `:${item.line}` : ""}: `
+        : "";
+      const evidence = item.evidence ? ` Evidence: ${item.evidence}.` : "";
+      const snippet = item.snippet ? ` Snippet: \`${item.snippet}\`.` : "";
+      return `- [${item.severity}] ${location}${item.message}${evidence}${snippet}`;
     })
     .join("\n");
 }
@@ -363,13 +442,16 @@ export async function generateArchitectureAudit(
   const config = await loadAIWikiConfig(rootDir);
   const ignoreRules = await collectProjectIgnoreRules(
     rootDir,
-    ARCHITECTURE_SCAN_EXCLUDED_PATHS,
-    config.ignore
+    [...ARCHITECTURE_SCAN_EXCLUDED_PATHS, ...config.architectureAudit.ignorePaths],
+    [...config.ignore, ...config.architectureAudit.ignorePaths]
   );
-  const sourceFiles = await summarizeSourceFiles(rootDir, ignoreRules);
+  const sourceFiles = filterIgnoredAuditFiles(
+    await summarizeSourceFiles(rootDir, ignoreRules),
+    config.architectureAudit.ignorePaths
+  );
   const issues = [
     ...largeFileIssues(sourceFiles),
-    ...hardcodedLiteralIssues(sourceFiles),
+    ...hardcodedLiteralIssues(sourceFiles, config.architectureAudit.ignoreLiteralPatterns),
     ...highRiskFileIssues(sourceFiles, config.riskFiles),
     ...(await missingModuleMemoryIssues(rootDir))
   ];

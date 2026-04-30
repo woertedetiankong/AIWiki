@@ -39,6 +39,17 @@ const rulesTargetsSchema = z
     cursorRules: value.cursorRules ?? DEFAULT_RULES_TARGETS.cursorRules
   }));
 
+const architectureAuditSchema = z
+  .object({
+    ignorePaths: z.array(z.string()).optional(),
+    ignoreLiteralPatterns: z.array(z.string()).optional()
+  })
+  .default({})
+  .transform((value) => ({
+    ignorePaths: value.ignorePaths ?? [],
+    ignoreLiteralPatterns: value.ignoreLiteralPatterns ?? []
+  }));
+
 export const aiWikiConfigSchema = z
   .object({
     version: z.string().default(CONFIG_VERSION),
@@ -52,7 +63,8 @@ export const aiWikiConfigSchema = z
     rulesTargets: rulesTargetsSchema,
     ignore: z.array(z.string()).default(() => [...DEFAULT_IGNORE]),
     riskFiles: z.array(z.string()).default([]),
-    highRiskModules: z.array(z.string()).default([])
+    highRiskModules: z.array(z.string()).default([]),
+    architectureAudit: architectureAuditSchema
   })
   .strict();
 
@@ -82,7 +94,11 @@ export function createDefaultConfig(projectName: string): AIWikiConfig {
     },
     ignore: [...DEFAULT_IGNORE],
     riskFiles: [],
-    highRiskModules: []
+    highRiskModules: [],
+    architectureAudit: {
+      ignorePaths: [],
+      ignoreLiteralPatterns: []
+    }
   });
 }
 

@@ -31,13 +31,24 @@ const SEVERITY_BONUS = {
 } as const;
 
 function tokenize(query: string): string[] {
-  const tokens = query
-    .toLowerCase()
-    .split(/[^a-z0-9_./-]+/u)
+  const normalizedQuery = query.toLowerCase();
+  const pathFriendlyTokens = normalizedQuery
+    .split(/[^\p{Letter}\p{Number}_./-]+/u)
     .map((token) => token.trim())
     .filter(Boolean);
+  const cjkRuns = normalizedQuery.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu) ?? [];
+  const cjkTokens = cjkRuns.flatMap((run) => {
+    if (run.length <= 2) {
+      return [run];
+    }
 
-  return [...new Set(tokens)];
+    return [
+      run,
+      ...Array.from({ length: run.length - 1 }, (_, index) => run.slice(index, index + 2))
+    ];
+  });
+
+  return [...new Set([...pathFriendlyTokens, ...cjkTokens])];
 }
 
 function normalized(value: string): string {

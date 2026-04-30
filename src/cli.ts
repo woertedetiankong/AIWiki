@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { generateAgentContext } from "./agent.js";
 import { applyWikiUpdatePlan, readWikiUpdatePlanFile } from "./apply.js";
 import { generateArchitectureAudit } from "./architecture.js";
 import { generateDevelopmentBrief } from "./brief.js";
+import { generateCodexRunbook } from "./codex.js";
 import { AIWIKI_VERSION } from "./constants.js";
+import { doctorWiki } from "./doctor.js";
 import { buildWikiGraph, relateGraphFile } from "./graph.js";
 import { importGraphifyContext } from "./graphify.js";
 import { generateFileGuardrails } from "./guard.js";
@@ -78,6 +81,66 @@ program
   .name("aiwiki")
   .description("Local-first AI coding memory and context engineering CLI.")
   .version(AIWIKI_VERSION);
+
+program
+  .command("codex")
+  .description("Generate a Codex runbook for automatically using AIWiki during a task.")
+  .argument("<task>", "User requirement or task description")
+  .option("--limit <n>", "Maximum number of wiki pages to include")
+  .option("--with-graphify", "Include graphify-out structural context when available", false)
+  .option("--architecture-guard", "Include explicit architecture guard signals", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      task: string,
+      options: {
+        limit?: string;
+        withGraphify?: boolean;
+        architectureGuard?: boolean;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await generateCodexRunbook(process.cwd(), task, {
+        limit: parsePositiveInteger(options.limit),
+        withGraphify: options.withGraphify,
+        architectureGuard: options.architectureGuard,
+        format
+      });
+
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+program
+  .command("agent")
+  .description("Generate compact read-only context for an AI coding agent.")
+  .argument("<task>", "Task description")
+  .option("--limit <n>", "Maximum number of wiki pages to include")
+  .option("--with-graphify", "Include graphify-out structural context when available", false)
+  .option("--architecture-guard", "Include explicit architecture guard signals", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      task: string,
+      options: {
+        limit?: string;
+        withGraphify?: boolean;
+        architectureGuard?: boolean;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await generateAgentContext(process.cwd(), task, {
+        limit: parsePositiveInteger(options.limit),
+        withGraphify: options.withGraphify,
+        architectureGuard: options.architectureGuard,
+        format
+      });
+
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
 
 program
   .command("init")
@@ -418,6 +481,23 @@ program
     process.stdout.write(format === "json" ? result.json : result.markdown);
 
     if (result.report.summary.errors > 0) {
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("doctor")
+  .description("Diagnose long-term AIWiki memory health and maintenance needs.")
+  .option("--min-rule-count <n>", "Minimum pitfall encountered_count for rule promotion candidates")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (options: { minRuleCount?: string; format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await doctorWiki(process.cwd(), {
+      minRulePromotionCount: parsePositiveInteger(options.minRuleCount)
+    });
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+
+    if (result.report.summary.lintErrors > 0) {
       process.exitCode = 1;
     }
   });

@@ -168,6 +168,42 @@ describe("generateReflectPreview", () => {
     );
   });
 
+  it("suggests freshness refreshes for wiki pages referencing changed files", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/brief.ts", "export const value = 1;\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), { recursive: true });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "brief.md"),
+      {
+        type: "module",
+        title: "Brief",
+        modules: ["brief"],
+        files: ["src/brief.ts"]
+      },
+      "# Brief\n\nBrief memory.\n"
+    );
+    await initGitProject(rootDir);
+    await writeProjectFile(rootDir, "src/brief.ts", "export const value = 2;\n");
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.preview.selectedDocs).toContain("wiki/modules/brief.md");
+    expect(result.markdown).toContain("Refresh Brief");
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "module",
+          title: "Brief",
+          source: "reflect"
+        })
+      ])
+    );
+  });
+
   it("scopes module draft files to the inferred changed module", async () => {
     const rootDir = await tempProject();
     await writeProjectFile(rootDir, "README.md", "# Demo\n");
