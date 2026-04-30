@@ -6,12 +6,13 @@ memory and guardrail assistant.
 
 Before starting a non-trivial task:
 1. Run `aiwiki codex "<task>"` to get the task runbook.
-2. Run `aiwiki agent "<task>"` when compact read-only context is enough.
-3. Treat AIWiki output as project memory and constraints, not exact edit steps.
-4. Confirm module boundaries, configuration boundaries, and portability risks before editing code.
-5. Create your own implementation plan before editing code.
-6. Do not hardcode provider names, secrets, URLs, pricing, status mappings, business constants, or file paths in business logic.
-7. Keep reusable modules small enough to migrate: separate provider adapters, API/webhook handling, persistence, UI, configuration, and tests.
+2. Use `aiwiki codex "<task>" --team` when Codex will coordinate multiple agents; AIWiki does not create or manage those agents.
+3. Run `aiwiki agent "<task>"` when compact read-only context is enough.
+4. Treat AIWiki output as project memory and constraints, not exact edit steps.
+5. Confirm module boundaries, configuration boundaries, and portability risks before editing code.
+6. Create your own implementation plan before editing code.
+7. Do not hardcode provider names, secrets, URLs, pricing, status mappings, business constants, or file paths in business logic.
+8. Keep reusable modules small enough to migrate: separate provider adapters, API/webhook handling, persistence, UI, configuration, and tests.
 
 Before editing files:
 1. Run `aiwiki guard <file>`.

@@ -60,6 +60,44 @@ describe("generateCodexRunbook", () => {
     expect(await readFile(path.join(rootDir, ".aiwiki", "evals", "brief-cases.jsonl"), "utf8")).toBe(initialEvals);
   });
 
+  it("adds team-aware guidance without agent orchestration", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addCodexMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+
+    const result = await generateCodexRunbook(rootDir, "improve search memory", {
+      team: true
+    });
+    const parsed = JSON.parse(result.json) as {
+      team?: {
+        enabled: boolean;
+        roles: Array<{
+          name: string;
+          commands: string[];
+          mustNot: string[];
+        }>;
+      };
+    };
+
+    expect(result.markdown).toContain("## Team Mode");
+    expect(result.markdown).toContain("AIWiki does not create or manage agents");
+    expect(result.markdown).toContain("## Implementer Agent");
+    expect(result.markdown).toContain("## Reviewer Agent");
+    expect(result.markdown).toContain("## Memory Steward Agent");
+    expect(result.markdown).toContain("## Handoff Rules");
+    expect(parsed.team?.enabled).toBe(true);
+    expect(parsed.team?.roles.map((role) => role.name)).toEqual([
+      "Implementer",
+      "Reviewer",
+      "Memory Steward"
+    ]);
+    expect(parsed.team?.roles.flatMap((role) => role.mustNot).join("\n")).toContain(
+      "without user approval"
+    );
+  });
+
   it("exposes the codex command through the CLI", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -80,5 +118,32 @@ describe("generateCodexRunbook", () => {
     expect(stdout).toContain("# Codex AIWiki Runbook");
     expect(stdout).toContain("aiwiki guard src/search.ts");
     expect(stdout).toContain("Final Response Checklist");
+  });
+
+  it("exposes team mode through the CLI", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addCodexMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", tsxLoader, cliPath, "codex", "improve search memory", "--team", "--format", "json"],
+      { cwd: rootDir }
+    );
+    const parsed = JSON.parse(stdout) as {
+      team?: {
+        enabled: boolean;
+        roles: Array<{ name: string }>;
+      };
+    };
+
+    expect(parsed.team?.enabled).toBe(true);
+    expect(parsed.team?.roles).toHaveLength(3);
   });
 });

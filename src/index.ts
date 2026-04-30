@@ -145,7 +145,10 @@ export type {
 export type {
   CodexRunbook,
   CodexRunbookOptions,
-  CodexRunbookResult
+  CodexRunbookResult,
+  CodexTeamRoleName,
+  CodexTeamRunbook,
+  CodexTeamRunbookRole
 } from "./codex.js";
 export type {
   DoctorFinding,

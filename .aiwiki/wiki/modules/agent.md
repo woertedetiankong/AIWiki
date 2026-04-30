@@ -22,4 +22,6 @@ last_updated: '2026-04-30'
 
 The product goal is: users describe requirements, Codex runs AIWiki before editing, guards concrete files, reflects after implementation, checks memory health with `doctor`, and only confirms memory writes after explicit user approval.
 
+`aiwiki codex "<task>" --team` is the team-aware mode for Codex-managed agent teams. It does not create, schedule, assign, or merge agents; it only gives Codex implementer, reviewer, memory-steward, and handoff guidance around shared local memory.
+
 Related memory: [[../pitfalls/command-noise.md]], [[../rules/preview-first-memory-updates.md]].

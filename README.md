@@ -53,6 +53,7 @@ aiwiki <command>
 aiwiki init --project-name my-project
 aiwiki map --write
 aiwiki codex "implement the next feature"
+aiwiki codex "implement the next feature" --team
 aiwiki agent "implement the next feature"
 aiwiki brief "implement the next feature"
 aiwiki guard src/example.ts
@@ -116,11 +117,16 @@ When the user is not comfortable with CLI details, Codex should run `aiwiki code
 code changes, checks run, and whether AIWiki memory is current or has candidate
 updates awaiting review.
 
+For Codex-managed agent teams, use `aiwiki codex "<task>" --team`. AIWiki does
+not create, schedule, or merge agents; it emits a team-aware runbook so Codex can
+coordinate implementer, reviewer, and memory-steward responsibilities around the
+same local project memory.
+
 ## Command Surface
 
 ```bash
 aiwiki init [--project-name <name>] [--force]
-aiwiki codex "<task>" [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
+aiwiki codex "<task>" [--limit <n>] [--with-graphify] [--architecture-guard] [--team] [--format markdown|json]
 aiwiki agent "<task>" [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
 aiwiki search "<query>" [--type <type>] [--limit <n>] [--format markdown|json]
 aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force] [--with-graphify] [--architecture-guard] [--read-only] [--format markdown|json]

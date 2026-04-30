@@ -89,6 +89,7 @@ program
   .option("--limit <n>", "Maximum number of wiki pages to include")
   .option("--with-graphify", "Include graphify-out structural context when available", false)
   .option("--architecture-guard", "Include explicit architecture guard signals", false)
+  .option("--team", "Include a team-aware runbook for Codex-managed agent teams", false)
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
@@ -97,6 +98,7 @@ program
         limit?: string;
         withGraphify?: boolean;
         architectureGuard?: boolean;
+        team?: boolean;
         format?: string;
       }
     ) => {
@@ -105,6 +107,7 @@ program
         limit: parsePositiveInteger(options.limit),
         withGraphify: options.withGraphify,
         architectureGuard: options.architectureGuard,
+        team: options.team,
         format
       });
 
