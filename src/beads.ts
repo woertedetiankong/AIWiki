@@ -120,7 +120,8 @@ async function runBd(rootDir: string, args: string[]): Promise<string | undefine
   try {
     const { stdout } = await execFileAsync("bd", args, {
       cwd: rootDir,
-      maxBuffer: 1024 * 1024
+      maxBuffer: 1024 * 1024,
+      shell: process.platform === "win32"
     });
     return stdout;
   } catch {
