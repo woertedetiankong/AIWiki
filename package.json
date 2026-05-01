@@ -2,6 +2,7 @@
   "name": "aiwiki",
   "version": "0.1.0",
   "description": "Local-first AI coding memory and context engineering CLI.",
+  "license": "MIT",
   "keywords": [
     "ai",
     "coding-agent",
@@ -30,7 +31,7 @@
     }
   },
   "bin": {
-    "aiwiki": "./dist/cli.js"
+    "aiwiki": "dist/cli.js"
   },
   "files": [
     "dist"
