@@ -4,16 +4,4 @@ dist/
 .env*
 .history/
 .opensource-explorer/
-
-# AIWiki runtime/session outputs. Keep durable .aiwiki config, prompts, index,
-# and reviewed wiki pages versionable; keep local evals, task runs, graph
-# snapshots, and generated update plans out of normal commits.
-.aiwiki/context-packs/*.json
-.aiwiki/evals/*.jsonl
-.aiwiki/graph/*.json
-.aiwiki/log.md
-.aiwiki/cache/*.sqlite
-.aiwiki/cache/*.sqlite-*
-.aiwiki/snapshots/*.jsonl
-.aiwiki/tasks/active-task
-.aiwiki/tasks/*/
+.aiwiki/
