@@ -114,7 +114,7 @@ export async function generateAgentContext(
         items: [
           `Task: ${task}`,
           `Project: ${brief.projectName}`,
-          "Read-only context only; no AIWiki logs, evals, or files were written."
+          "Context lookup is read-only; this view does not confirm long-term memory writes."
         ]
       },
       {

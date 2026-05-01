@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   formatIngestPreviewMarkdown,
@@ -9,6 +12,8 @@ import {
 import { applyWikiUpdatePlan } from "../src/apply.js";
 import { initAIWiki } from "../src/init.js";
 import { writeMarkdownFile } from "../src/markdown.js";
+
+const execFileAsync = promisify(execFile);
 
 async function tempProject(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "aiwiki-ingest-"));
@@ -217,5 +222,32 @@ describe("generateIngestPreview", () => {
     };
     expect(parsed.sourcePath).toBe("notes/lesson.md");
     expect(parsed.updatePlanDraft.entries).toHaveLength(1);
+  });
+
+  it("exposes ingest as a CLI alias for reflect notes with raw preservation", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/lesson.md",
+      "# Lesson\n\nAuth routes must check permissions server-side.\n"
+    );
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", tsxLoader, cliPath, "ingest", "notes/lesson.md"],
+      { cwd: rootDir }
+    );
+
+    expect(stdout).toContain("# Reflect Preview");
+    expect(stdout).toContain("Raw note copied to .aiwiki/sources/raw-notes/lesson.md");
+    expect(await readFile(
+      path.join(rootDir, ".aiwiki/sources/raw-notes/lesson.md"),
+      "utf8"
+    )).toContain("Auth routes must check permissions");
   });
 });

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { stat } from "node:fs/promises";
 import { Command } from "commander";
 import { generateAgentContext } from "./agent.js";
 import { applyWikiUpdatePlan, readWikiUpdatePlanFile } from "./apply.js";
 import { generateArchitectureAudit } from "./architecture.js";
 import { generateDevelopmentBrief } from "./brief.js";
 import { generateCodexRunbook } from "./codex.js";
-import { AIWIKI_VERSION } from "./constants.js";
+import { AIWIKI_VERSION, PROJECT_MAP_PATH } from "./constants.js";
 import { doctorWiki } from "./doctor.js";
 import { toStructuredCliError, wantsJsonError } from "./errors.js";
 import { buildWikiGraph, relateGraphFile } from "./graph.js";
@@ -23,7 +24,7 @@ import {
   parseOutputFormat,
   parsePositiveInteger
 } from "./output.js";
-import { generateIngestPreview } from "./ingest.js";
+import { resolveProjectPath } from "./paths.js";
 import { runLargeRepoEval } from "./large-repo-eval.js";
 import { lintWiki } from "./lint.js";
 import {
@@ -45,6 +46,7 @@ import {
   claimTask,
   createTask,
   discoverTask,
+  ensureActiveTask,
   getTaskStatus,
   listTasks,
   readyTasks,
@@ -154,11 +156,147 @@ function parseFixtureNames(values: string[] | undefined): string[] | undefined {
   return names && names.length > 0 ? names : undefined;
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+async function ensureProjectMap(rootDir: string): Promise<void> {
+  const projectMapPath = resolveProjectPath(rootDir, PROJECT_MAP_PATH);
+  if (await fileExists(projectMapPath)) {
+    return;
+  }
+
+  await generateProjectMap(rootDir, { write: true });
+}
+
+async function prepareAgentWorkflow(
+  rootDir: string,
+  task: string,
+  options: {
+    task?: boolean;
+    map?: boolean;
+  }
+): Promise<void> {
+  if (options.task !== false) {
+    await ensureActiveTask(rootDir, task, { assignee: "codex" });
+  }
+
+  if (options.map !== false) {
+    await ensureProjectMap(rootDir);
+  }
+}
+
+async function writeAgentContext(
+  task: string,
+  options: {
+    limit?: string;
+    withGraphify?: boolean;
+    architectureGuard?: boolean;
+    format?: string;
+    task?: boolean;
+    map?: boolean;
+  }
+): Promise<void> {
+  await prepareAgentWorkflow(process.cwd(), task, options);
+  const format = parseOutputFormat(options.format);
+  const result = await generateAgentContext(process.cwd(), task, {
+    limit: parsePositiveInteger(options.limit),
+    withGraphify: options.withGraphify,
+    architectureGuard: options.architectureGuard,
+    format
+  });
+
+  process.stdout.write(format === "json" ? result.json : result.markdown);
+}
+
+async function writeRunbook(
+  task: string,
+  options: {
+    limit?: string;
+    withGraphify?: boolean;
+    architectureGuard?: boolean;
+    team?: boolean;
+    format?: string;
+    task?: boolean;
+    map?: boolean;
+  }
+): Promise<void> {
+  await prepareAgentWorkflow(process.cwd(), task, options);
+  const format = parseOutputFormat(options.format);
+  const result = await generateCodexRunbook(process.cwd(), task, {
+    limit: parsePositiveInteger(options.limit),
+    withGraphify: options.withGraphify,
+    architectureGuard: options.architectureGuard,
+    team: options.team,
+    format
+  });
+
+  process.stdout.write(format === "json" ? result.json : result.markdown);
+}
+
+function formatAdvancedHelp(): string {
+  return [
+    "# AIWiki Advanced Commands",
+    "",
+    "These commands remain available, but they are hidden from the top-level help so daily agent workflows stay focused.",
+    "",
+    "## Agent Aliases",
+    "- aiwiki codex \"<task>\" [--team] (alias direction: aiwiki agent \"<task>\" --runbook [--team])",
+    "- aiwiki agent \"<task>\" [--no-task] [--no-map] (skip automatic task/project-map preparation)",
+    "",
+    "## Machine Contracts and Indexes",
+    "- aiwiki schema [all|task|task-event|prime]",
+    "- aiwiki index build [--no-jsonl]",
+    "- aiwiki index status",
+    "",
+    "## Architecture, Graph, and Module Workflows",
+    "- aiwiki architecture audit",
+    "- aiwiki graph build",
+    "- aiwiki graph import-graphify <path>",
+    "- aiwiki graph relate <file>",
+    "- aiwiki module export <module>",
+    "- aiwiki module import <pack>",
+    "- aiwiki module brief <module> \"<task>\"",
+    "- aiwiki module lint <module>",
+    "",
+    "## Memory Maintenance Internals",
+    "- aiwiki ingest <file> (alias direction: aiwiki reflect --notes <file> --save-raw)",
+    "- aiwiki promote-rules",
+    "",
+    "## Task Event Shortcuts",
+    "- aiwiki decision \"<decision>\"",
+    "- aiwiki blocker \"<blocker>\"",
+    "",
+    "## Maintainer Evals",
+    "- aiwiki eval large-repos",
+    ""
+  ].join("\n");
+}
+
 program
   .name("aiwiki")
   .description("Local-first AI coding memory and context engineering CLI.")
   .version(AIWIKI_VERSION)
   .showHelpAfterError("(run `aiwiki <command> --help` for command usage)");
+
+const advancedCommand = program
+  .command("advanced", { hidden: true })
+  .description("Show advanced and compatibility commands hidden from top-level help.")
+  .action(() => {
+    process.stdout.write(formatAdvancedHelp());
+  });
+
+advancedCommand.addHelpText("after", `\n${formatAdvancedHelp()}`);
 
 program
   .command("prime")
@@ -174,7 +312,7 @@ program
   });
 
 program
-  .command("schema")
+  .command("schema", { hidden: true })
   .description("Print JSON schemas for AIWiki agent-facing data.")
   .argument("[name]", "Schema name: all, task, task-event, or prime", "all")
   .option("--format <format>", "Output format: markdown or json", "markdown")
@@ -185,13 +323,15 @@ program
   });
 
 program
-  .command("codex")
-  .description("Generate a Codex runbook for automatically using AIWiki during a task.")
+  .command("codex", { hidden: true })
+  .description("Compatibility alias for `aiwiki agent <task> --runbook`.")
   .argument("<task>", "User requirement or task description")
   .option("--limit <n>", "Maximum number of wiki pages to include")
   .option("--with-graphify", "Include graphify-out structural context when available", false)
   .option("--architecture-guard", "Include explicit architecture guard signals", false)
   .option("--team", "Include a team-aware runbook for Codex-managed agent teams", false)
+  .option("--no-task", "Do not start or claim an active AIWiki task")
+  .option("--no-map", "Do not bootstrap .aiwiki/wiki/project-map.md")
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
@@ -201,29 +341,26 @@ program
         withGraphify?: boolean;
         architectureGuard?: boolean;
         team?: boolean;
+        task?: boolean;
+        map?: boolean;
         format?: string;
       }
     ) => {
-      const format = parseOutputFormat(options.format);
-      const result = await generateCodexRunbook(process.cwd(), task, {
-        limit: parsePositiveInteger(options.limit),
-        withGraphify: options.withGraphify,
-        architectureGuard: options.architectureGuard,
-        team: options.team,
-        format
-      });
-
-      process.stdout.write(format === "json" ? result.json : result.markdown);
+      await writeRunbook(task, options);
     }
   );
 
 program
   .command("agent")
-  .description("Generate compact read-only context for an AI coding agent.")
+  .description("Generate compact context or a runbook for an AI coding agent.")
   .argument("<task>", "Task description")
   .option("--limit <n>", "Maximum number of wiki pages to include")
   .option("--with-graphify", "Include graphify-out structural context when available", false)
   .option("--architecture-guard", "Include explicit architecture guard signals", false)
+  .option("--runbook", "Generate the full Codex-style runbook instead of compact context", false)
+  .option("--team", "Include a team-aware runbook; implies --runbook", false)
+  .option("--no-task", "Do not start or claim an active AIWiki task")
+  .option("--no-map", "Do not bootstrap .aiwiki/wiki/project-map.md")
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
@@ -232,18 +369,19 @@ program
         limit?: string;
         withGraphify?: boolean;
         architectureGuard?: boolean;
+        runbook?: boolean;
+        team?: boolean;
+        task?: boolean;
+        map?: boolean;
         format?: string;
       }
     ) => {
-      const format = parseOutputFormat(options.format);
-      const result = await generateAgentContext(process.cwd(), task, {
-        limit: parsePositiveInteger(options.limit),
-        withGraphify: options.withGraphify,
-        architectureGuard: options.architectureGuard,
-        format
-      });
+      if (options.runbook || options.team) {
+        await writeRunbook(task, options);
+        return;
+      }
 
-      process.stdout.write(format === "json" ? result.json : result.markdown);
+      await writeAgentContext(task, options);
     }
   );
 
@@ -392,11 +530,11 @@ program
   );
 
 const architectureCommand = program
-  .command("architecture")
+  .command("architecture", { hidden: true })
   .description("Inspect architecture health and portability risks.");
 
 const indexCommand = program
-  .command("index")
+  .command("index", { hidden: true })
   .description("Manage the AIWiki hybrid SQLite index and JSONL snapshot.");
 
 indexCommand
@@ -433,7 +571,7 @@ architectureCommand
   });
 
 const evalCommand = program
-  .command("eval")
+  .command("eval", { hidden: true })
   .description("Run AIWiki quality evals against repeatable fixtures.");
 
 evalCommand
@@ -467,7 +605,7 @@ evalCommand
   );
 
 const moduleCommand = program
-  .command("module")
+  .command("module", { hidden: true })
   .description("Export and import portable AIWiki module memory.");
 
 moduleCommand
@@ -561,6 +699,7 @@ program
   .option("--force", "Overwrite the output plan if it already exists", false)
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .option("--read-only", "Do not write evals or output plan files", false)
+  .option("--save-raw", "Copy --notes into .aiwiki/sources/raw-notes before previewing", false)
   .action(
     async (
       options: {
@@ -571,6 +710,7 @@ program
         force?: boolean;
         format?: string;
         readOnly?: boolean;
+        saveRaw?: boolean;
       }
     ) => {
       const format = parseOutputFormat(options.format);
@@ -580,7 +720,8 @@ program
         limit: parsePositiveInteger(options.limit),
         outputPlan: options.outputPlan,
         force: options.force,
-        readOnly: options.readOnly
+        readOnly: options.readOnly,
+        saveRaw: options.saveRaw
       });
 
       process.stdout.write(format === "json" ? result.json : result.markdown);
@@ -588,8 +729,8 @@ program
   );
 
 program
-  .command("ingest")
-  .description("Preserve a raw Markdown note and generate no-LLM wiki suggestions.")
+  .command("ingest", { hidden: true })
+  .description("Compatibility alias direction: use `reflect --notes <file> --save-raw`.")
   .argument("<file>", "Project-local Markdown note to ingest")
   .option("--force", "Overwrite the raw note copy and output plan if either destination exists", false)
   .option("--limit <n>", "Maximum number of related wiki pages to include")
@@ -606,7 +747,9 @@ program
       }
     ) => {
       const format = parseOutputFormat(options.format);
-      const result = await generateIngestPreview(process.cwd(), file, {
+      const result = await generateReflectPreview(process.cwd(), {
+        notes: file,
+        saveRaw: true,
         force: options.force,
         limit: parsePositiveInteger(options.limit),
         outputPlan: options.outputPlan
@@ -671,7 +814,7 @@ program
   });
 
 const graphCommand = program
-  .command("graph")
+  .command("graph", { hidden: true })
   .description("Build and inspect the AIWiki graph.");
 
 graphCommand
@@ -733,7 +876,7 @@ graphCommand
   );
 
 program
-  .command("promote-rules")
+  .command("promote-rules", { hidden: true })
   .description("Preview rule promotion candidates from repeated high-severity pitfalls.")
   .option("--min-count <n>", "Minimum encountered_count required", "2")
   .option("--format <format>", "Output format: markdown or json", "markdown")
@@ -953,15 +1096,18 @@ program
   .command("checkpoint")
   .description("Record a checkpoint for the active AIWiki task.")
   .option("--message <message>", "Checkpoint message")
+  .option("--summary <summary>", "Alias for --message")
   .option("--step <step>", "Step or milestone name")
   .option("--status <status>", "Step status, such as done or in_progress")
   .option("--tests <tests>", "Test note, one per line if multiple")
   .option("--next <next>", "Next recommended step, one per line if multiple")
-  .option("--from-git-diff", "Record changed files from git diff", false)
+  .option("--from-git-diff", "Record changed files from git diff and status; this is now the default")
+  .option("--no-from-git-diff", "Skip automatic changed-file capture")
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (options: {
       message?: string;
+      summary?: string;
       step?: string;
       status?: string;
       tests?: string;
@@ -971,7 +1117,7 @@ program
     }) => {
       const format = parseOutputFormat(options.format);
       const result = await checkpointTask(process.cwd(), {
-        message: options.message,
+        message: options.message ?? options.summary,
         step: options.step,
         status: options.status,
         tests: options.tests ? [options.tests] : undefined,
@@ -1010,7 +1156,7 @@ program
   );
 
 program
-  .command("decision")
+  .command("decision", { hidden: true })
   .description("Record a user decision for the active AIWiki task.")
   .argument("<decision>", "Decision text")
   .option("--module <module>", "Related module")
@@ -1029,7 +1175,7 @@ program
   );
 
 program
-  .command("blocker")
+  .command("blocker", { hidden: true })
   .description("Record a blocker or open question for the active AIWiki task.")
   .argument("<blocker>", "Blocker or question text")
   .option("--severity <severity>", "Severity: low, medium, high, critical")

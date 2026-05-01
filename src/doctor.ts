@@ -162,7 +162,7 @@ function nextActions(report: Omit<DoctorReport, "nextActions">): string[] {
     actions.push("Review proposed or uncertain pages and either activate, revise, or deprecate them.");
   }
   if (actions.length === 0) {
-    actions.push("Memory health looks clean. Continue using `aiwiki codex`, `agent`, `guard`, and `reflect` during development.");
+    actions.push("Memory health looks clean. Continue using `aiwiki agent`, `guard`, and `reflect` during development.");
   }
 
   return actions;

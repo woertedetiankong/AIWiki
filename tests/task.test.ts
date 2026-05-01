@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { initAIWiki } from "../src/init.js";
@@ -12,6 +13,7 @@ import {
   closeTask,
   createTask,
   discoverTask,
+  ensureActiveTask,
   getTaskStatus,
   listTasks,
   readyTasks,
@@ -76,6 +78,25 @@ describe("AIWiki task continuity", () => {
         "utf8"
       )
     ).toContain("PRD Implementation Progress");
+  });
+
+  it("ensures an active task for agent workflows without duplicate starts", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    const created = await ensureActiveTask(rootDir, "Implement agent workflow", {
+      assignee: "codex-test"
+    });
+    const reused = await ensureActiveTask(rootDir, "Implement agent workflow", {
+      assignee: "codex-test"
+    });
+
+    expect(created.data.created).toBe(true);
+    expect(reused.data.created).toBe(false);
+    expect(reused.data.metadata.id).toBe(created.data.metadata.id);
+    expect(
+      await readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")
+    ).toBe(created.data.metadata.id);
   });
 
   it("records checkpoints and updates status and resume", async () => {
@@ -231,6 +252,111 @@ describe("AIWiki task continuity", () => {
       "utf8"
     );
     expect(changedFiles).toContain("src/index.ts");
+  });
+
+  it("auto-captures changed files, suggested tests, and next action hints", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/task.ts", "export const value = 1;\n");
+    await writeProjectFile(rootDir, "tests/task.test.ts", "export const test = true;\n");
+    await writeProjectFile(
+      rootDir,
+      "package.json",
+      `${JSON.stringify({ scripts: { test: "vitest run" } }, null, 2)}\n`
+    );
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+    await startTask(rootDir, "Auto checkpoint", { id: "auto-checkpoint" });
+    await writeProjectFile(rootDir, "src/task.ts", "export const value = 2;\n");
+    await writeProjectFile(
+      rootDir,
+      ".aiwiki/context-packs/local-plan.json",
+      "{\"local\":true}\n"
+    );
+    await writeProjectFile(rootDir, ".venv/cache.py", "print('cache')\n");
+    await writeProjectFile(rootDir, "node_modules/demo/index.js", "module.exports = true;\n");
+    await writeProjectFile(rootDir, "package-lock.json", "{\"lockfileVersion\":3}\n");
+
+    const checkpoint = await checkpointTask(rootDir, {
+      message: "Captured handoff context"
+    });
+    const resume = await resumeTask(rootDir, undefined, { readOnly: true });
+
+    expect(checkpoint.data.files).toContain("src/task.ts");
+    expect(checkpoint.data.files?.some((file) => file.startsWith(".aiwiki/"))).toBe(false);
+    expect(checkpoint.data.files?.some((file) => file.startsWith(".venv/"))).toBe(false);
+    expect(checkpoint.data.files?.some((file) => file.startsWith("node_modules/"))).toBe(false);
+    expect(checkpoint.data.files).not.toContain("package-lock.json");
+    expect(checkpoint.data.tests).toContain(
+      "Suggested test command: npm run test -- tests/task.test.ts"
+    );
+    expect(checkpoint.data.next?.[0]).toBe(
+      "Run aiwiki guard src/task.ts before the next edit."
+    );
+    expect(checkpoint.markdown).toContain("## Changed Files");
+    expect(checkpoint.markdown).toContain("## Next Actions");
+    expect(resume.markdown.split("\n")[2]).toContain("下一步做什么 / Next Action:");
+    expect(resume.markdown).toContain("Run aiwiki guard src/task.ts before the next edit.");
+  });
+
+  it("uses latest changed-file checkpoint for handoff summaries", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Latest changed files", { id: "latest-files" });
+
+    await appendFile(
+      path.join(rootDir, ".aiwiki", "tasks", "latest-files", "checkpoints.jsonl"),
+      `${JSON.stringify({
+        time: new Date().toISOString(),
+        type: "checkpoint",
+        message: "Temp file captured",
+        files: ["agent-second.out"],
+        task_id: "latest-files"
+      })}\n`,
+      "utf8"
+    );
+    await appendFile(
+      path.join(rootDir, ".aiwiki", "tasks", "latest-files", "checkpoints.jsonl"),
+      `${JSON.stringify({
+        time: new Date().toISOString(),
+        type: "checkpoint",
+        message: "Clean handoff",
+        files: ["src/index.ts"],
+        task_id: "latest-files"
+      })}\n`,
+      "utf8"
+    );
+
+    const status = await getTaskStatus(rootDir);
+
+    expect(status.markdown).toContain("src/index.ts");
+    expect(status.markdown).not.toContain("agent-second.out");
+  });
+
+  it("accepts checkpoint --summary as a CLI alias for --message", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Summary checkpoint", { id: "summary-checkpoint" });
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        tsxLoader,
+        cliPath,
+        "checkpoint",
+        "--summary",
+        "Finished summary alias",
+        "--no-from-git-diff"
+      ],
+      { cwd: rootDir }
+    );
+
+    expect(stdout).toContain("# Checkpoint Recorded");
+    expect(stdout).toContain("Finished summary alias");
   });
 
   it("lists tasks and closes the active task", async () => {

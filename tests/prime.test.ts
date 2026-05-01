@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +9,21 @@ import { createTask, startTask } from "../src/task.js";
 
 async function tempProject(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "aiwiki-prime-"));
+}
+
+async function initGitProject(rootDir: string): Promise<void> {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const execFileAsync = promisify(execFile);
+  await execFileAsync("git", ["init"], { cwd: rootDir });
+  await execFileAsync("git", ["config", "user.email", "test@example.com"], {
+    cwd: rootDir
+  });
+  await execFileAsync("git", ["config", "user.name", "Test User"], {
+    cwd: rootDir
+  });
+  await execFileAsync("git", ["add", "."], { cwd: rootDir });
+  await execFileAsync("git", ["commit", "-m", "baseline"], { cwd: rootDir });
 }
 
 describe("AIWiki prime", () => {
@@ -72,5 +87,58 @@ describe("AIWiki prime", () => {
     expect(result.context.memoryHealth.staleWarnings).toBeGreaterThan(0);
     expect(result.markdown).toContain("aiwiki doctor (Doctor found stale memory warnings.)");
     expect(result.markdown).not.toContain("Doctor found lint errors or stale memory warnings.");
+  });
+
+  it("surfaces guard targets from active task checkpoints and git status", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeFile(path.join(rootDir, "README.md"), "# Demo\n", "utf8");
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "handoff.ts"), "export const value = 1;\n", "utf8");
+    await initGitProject(rootDir);
+    await startTask(rootDir, "Improve handoff", { id: "handoff-task" });
+    await writeFile(path.join(rootDir, "src", "handoff.ts"), "export const value = 2;\n", "utf8");
+
+    const result = await generatePrimeContext(rootDir);
+
+    expect(result.context.guardTargets).toContain("src/handoff.ts");
+    expect(result.markdown).toContain("## Guard Targets");
+    expect(result.markdown).toContain("aiwiki guard src/handoff.ts");
+    expect(result.context.actions.some((action) => action.kind === "guard_target")).toBe(true);
+  });
+
+  it("reads Beads ready work when .beads exists without owning the task database", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, ".beads"), { recursive: true });
+    const binDir = path.join(rootDir, "bin");
+    await mkdir(binDir, { recursive: true });
+    const bdPath = path.join(binDir, "bd");
+    const bdScript = [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('ready')) {",
+      "  console.log(JSON.stringify({ issues: [{ id: 'bd-a1b2', title: 'Wire handoff', priority: 1, status: 'open' }] }));",
+      "} else if (process.argv.includes('status')) {",
+      "  console.log(JSON.stringify({ open: 1, in_progress: 0, blocked: 0 }));",
+      "}",
+      ""
+    ].join("\n");
+    await writeFile(bdPath, bdScript, "utf8");
+    await writeFile(path.join(binDir, "bd.cmd"), "@echo off\r\nnode \"%~dp0bd\" %*\r\n", "utf8");
+    await chmod(bdPath, 0o755);
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+    try {
+      const result = await generatePrimeContext(rootDir);
+
+      expect(result.context.beads?.detected).toBe(true);
+      expect(result.context.beads?.available).toBe(true);
+      expect(result.context.beads?.ready[0]?.id).toBe("bd-a1b2");
+      expect(result.markdown).toContain("## Beads");
+      expect(result.markdown).toContain("bd-a1b2 | Wire handoff | P1 | open");
+      expect(result.context.actions.some((action) => action.kind === "beads_ready_work")).toBe(true);
+    } finally {
+      process.env.PATH = oldPath;
+    }
   });
 });

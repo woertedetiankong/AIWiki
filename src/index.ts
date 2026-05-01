@@ -1,4 +1,7 @@
 export {
+  readBeadsContext
+} from "./beads.js";
+export {
   formatAgentContextMarkdown,
   generateAgentContext
 } from "./agent.js";
@@ -162,6 +165,10 @@ export {
   generateProjectMap
 } from "./project-map.js";
 export {
+  normalizeRawNoteSourcePath,
+  saveRawNote
+} from "./raw-notes.js";
+export {
   generatePrimeContext
 } from "./prime.js";
 export {
@@ -193,6 +200,10 @@ export {
   startTask,
   TASK_FILES
 } from "./task.js";
+export type {
+  BeadsContext,
+  BeadsItem
+} from "./beads.js";
 export type {
   AgentContext,
   AgentContextOptions,
@@ -299,6 +310,10 @@ export type {
   ProjectMapOptions,
   ProjectMapResult
 } from "./project-map.js";
+export type {
+  SavedRawNote,
+  SaveRawNoteOptions
+} from "./raw-notes.js";
 export type {
   PrimeAction,
   PrimeContext,

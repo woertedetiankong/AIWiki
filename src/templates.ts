@@ -19,14 +19,15 @@ development requirement, Codex is responsible for using AIWiki as its local
 memory and guardrail assistant.
 
 Before starting a non-trivial task:
-1. Run \`aiwiki codex "<task>"\` to get the task runbook.
-2. Use \`aiwiki codex "<task>" --team\` when Codex will coordinate multiple agents; AIWiki does not create or manage those agents.
+1. Run \`aiwiki agent "<task>" --runbook\` to get the task runbook.
+2. Use \`aiwiki agent "<task>" --runbook --team\` when Codex will coordinate multiple agents; AIWiki does not create or manage those agents.
 3. Run \`aiwiki agent "<task>"\` when compact read-only context is enough.
-4. Treat AIWiki output as project memory and constraints, not exact edit steps.
-5. Confirm module boundaries, configuration boundaries, and portability risks before editing code.
-6. Create your own implementation plan before editing code.
-7. Do not hardcode provider names, secrets, URLs, pricing, status mappings, business constants, or file paths in business logic.
-8. Keep reusable modules small enough to migrate: separate provider adapters, API/webhook handling, persistence, UI, configuration, and tests.
+4. \`aiwiki codex "<task>"\` remains a compatibility alias for the runbook path.
+5. Treat AIWiki output as project memory and constraints, not exact edit steps.
+6. Confirm module boundaries, configuration boundaries, and portability risks before editing code.
+7. Create your own implementation plan before editing code.
+8. Do not hardcode provider names, secrets, URLs, pricing, status mappings, business constants, or file paths in business logic.
+9. Keep reusable modules small enough to migrate: separate provider adapters, API/webhook handling, persistence, UI, configuration, and tests.
 
 Before editing files:
 1. Run \`aiwiki guard <file>\`.

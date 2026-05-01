@@ -10,8 +10,10 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { ACTIVE_TASK_PATH, TASKS_DIR } from "./constants.js";
+import { ACTIVE_TASK_PATH, LOCAL_ARTIFACT_IGNORE, TASKS_DIR } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
+import { collectProjectIgnoreRules, shouldIgnorePath } from "./ignore.js";
+import type { IgnoreRule } from "./ignore.js";
 import { appendLogEntry } from "./log.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import type {
@@ -93,6 +95,11 @@ export interface TaskCommandResult<T> {
   data: T;
   markdown: string;
   json: string;
+}
+
+export interface EnsureActiveTaskResult {
+  metadata: TaskMetadata;
+  created: boolean;
 }
 
 export interface TaskStatusData {
@@ -256,6 +263,18 @@ async function activeTaskId(rootDir: string): Promise<string | undefined> {
   return value.length > 0 ? value : undefined;
 }
 
+async function tryReadMetadata(rootDir: string, taskId: string): Promise<TaskMetadata | undefined> {
+  try {
+    return await readMetadata(rootDir, taskId);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
 async function loadAllTaskMetadata(rootDir: string): Promise<TaskMetadata[]> {
   const tasksRoot = resolveProjectPath(rootDir, TASKS_DIR);
   let entries: string[] = [];
@@ -320,6 +339,22 @@ async function resolveTaskId(rootDir: string, taskId?: string): Promise<string> 
     : id;
 }
 
+async function uniqueTaskId(rootDir: string, title: string): Promise<string> {
+  const base = taskIdFor(title);
+  if (!(await pathExists(taskDir(rootDir, base)))) {
+    return base;
+  }
+
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!(await pathExists(taskDir(rootDir, candidate)))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Unable to create a unique task id for: ${title}`);
+}
+
 function taskById(tasks: TaskMetadata[]): Map<string, TaskMetadata> {
   return new Map(tasks.map((task) => [task.id, task]));
 }
@@ -368,21 +403,109 @@ function assertNoDependencyCycle(
   }
 }
 
-async function gitChangedFiles(rootDir: string): Promise<string[]> {
+function filterIgnoredFiles(files: string[], ignoreRules: readonly IgnoreRule[]): string[] {
+  return files.filter((file) => !shouldIgnorePath(file, ignoreRules));
+}
+
+async function gitChangedFiles(rootDir: string, ignoreRules: readonly IgnoreRule[]): Promise<string[]> {
+  const files = new Set<string>();
   try {
     const { stdout } = await execFileAsync("git", ["diff", "--name-only", "--", "."], {
       cwd: rootDir,
       maxBuffer: 1024 * 1024
     });
-    return stdout
+    for (const file of stdout
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((file) => toPosixPath(file))
-      .sort();
+      .map((file) => toPosixPath(file))) {
+      files.add(file);
+    }
   } catch {
-    return [];
+    // Non-git projects can still checkpoint explicit notes.
   }
+
+  try {
+    const { stdout } = await execFileAsync("git", ["status", "--short"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    });
+    for (const file of stdout
+      .split("\n")
+      .map(statusFile)
+      .filter((file): file is string => Boolean(file))) {
+      files.add(file);
+    }
+  } catch {
+    // Ignore git status failures for cold-start or non-git workspaces.
+  }
+
+  return filterIgnoredFiles([...files].sort(), ignoreRules);
+}
+
+function statusFile(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const renamed = /^R\s+(.+?)\s+->\s+(.+)$/u.exec(trimmed);
+  if (renamed) {
+    return toPosixPath(renamed[2] ?? "");
+  }
+
+  const match = /^(?:[ MADRCU?!]{2})\s+(.+)$/u.exec(line);
+  return match?.[1] ? toPosixPath(match[1]) : undefined;
+}
+
+async function projectFileExists(rootDir: string, relativePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(resolveProjectPath(rootDir, relativePath));
+    return fileStat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function directTestCandidate(file: string): string | undefined {
+  const parsed = path.parse(file);
+  if (!file.startsWith("src/") || !parsed.name) {
+    return undefined;
+  }
+  return `tests/${parsed.name}.test.ts`;
+}
+
+async function suggestedTests(rootDir: string, files: string[]): Promise<string[]> {
+  const commands: string[] = [];
+  for (const file of files) {
+    const candidate = directTestCandidate(file);
+    if (candidate && await projectFileExists(rootDir, candidate)) {
+      commands.push(`Suggested test command: npm run test -- ${candidate}`);
+    }
+  }
+
+  if (commands.length === 0 && await projectFileExists(rootDir, "package.json")) {
+    commands.push("Suggested test command: npm run test");
+  }
+
+  return [...new Set(commands)].slice(0, 3);
+}
+
+function inferredNextSteps(files: string[], tests: string[]): string[] {
+  const steps: string[] = [];
+  const firstSourceFile = files.find((file) =>
+    !file.startsWith(".aiwiki/") &&
+    !file.startsWith("docs/") &&
+    !file.endsWith(".md")
+  );
+  if (firstSourceFile) {
+    steps.push(`Run aiwiki guard ${firstSourceFile} before the next edit.`);
+  }
+  if (tests.length > 0) {
+    steps.push(`Run ${tests[0].replace(/^Suggested test command: /u, "")}.`);
+  }
+  steps.push("Run aiwiki resume --read-only at the start of the next session.");
+  return steps;
 }
 
 function splitList(values: string[] | undefined): string[] {
@@ -597,11 +720,14 @@ ${bulletList(next, "No next steps recorded.")}
 }
 
 function renderChangedFiles(checkpoints: TaskCheckpoint[]): string {
-  const files = [...new Set(
-    checkpoints
-      .filter((checkpoint) => checkpoint.type === "checkpoint")
-      .flatMap((checkpoint) => checkpoint.files ?? [])
-  )].sort();
+  const latestCheckpointWithFiles = [...checkpoints]
+    .reverse()
+    .find((checkpoint) =>
+      checkpoint.type === "checkpoint" &&
+      checkpoint.files &&
+      checkpoint.files.length > 0
+    );
+  const files = [...new Set(latestCheckpointWithFiles?.files ?? [])].sort();
   return `# Changed Files
 
 ${bulletList(files, "No changed files recorded.")}
@@ -733,8 +859,14 @@ function resumeMarkdown(status: TaskStatusData): string {
       ? `Last completed: ${completed[0]}`
       : undefined
   ].filter((item): item is string => Boolean(item));
+  const nextAction = next[0] ??
+    inProgress[0] ??
+    completed[0] ??
+    "Inspect the current git diff before editing.";
 
   return `# Resume Brief for Codex
+
+下一步做什么 / Next Action: ${nextAction}
 
 ## Continue From Here
 ${bulletList(continueFromHere, "No next step recorded. Inspect the current git diff before editing.")}
@@ -945,6 +1077,49 @@ export async function startTask(
     data: metadata,
     markdown: `# Task Started\n\n- Task ID: ${id}\n- Title: ${title}\n- Status: in_progress\n- Assignee: ${metadata.assignee}\n`,
     json: toJson(metadata)
+  };
+}
+
+export async function ensureActiveTask(
+  rootDir: string,
+  title: string,
+  options: TaskStartOptions = {}
+): Promise<TaskCommandResult<EnsureActiveTaskResult>> {
+  await loadAIWikiConfig(rootDir);
+
+  const activeId = await activeTaskId(rootDir);
+  if (activeId) {
+    const metadata = await tryReadMetadata(rootDir, activeId);
+    if (metadata && !isClosedStatus(metadata.status)) {
+      return {
+        data: { metadata, created: false },
+        markdown: `# Active Task Ready\n\n- Task ID: ${metadata.id}\n- Title: ${metadata.title}\n- Status: ${metadata.status}\n`,
+        json: toJson({ metadata, created: false })
+      };
+    }
+  }
+
+  const baseId = options.id ?? taskIdFor(title);
+  const existing = await tryReadMetadata(rootDir, baseId);
+  if (existing && !isClosedStatus(existing.status)) {
+    const claimed = await claimTask(rootDir, existing.id, {
+      actor: options.assignee
+    });
+    return {
+      data: { metadata: claimed.data, created: false },
+      markdown: `# Active Task Ready\n\n- Task ID: ${claimed.data.id}\n- Title: ${claimed.data.title}\n- Status: ${claimed.data.status}\n`,
+      json: toJson({ metadata: claimed.data, created: false })
+    };
+  }
+
+  const started = await startTask(rootDir, title, {
+    ...options,
+    id: options.id ?? (await uniqueTaskId(rootDir, title))
+  });
+  return {
+    data: { metadata: started.data, created: true },
+    markdown: `# Active Task Created\n\n- Task ID: ${started.data.id}\n- Title: ${started.data.title}\n- Status: ${started.data.status}\n`,
+    json: toJson({ metadata: started.data, created: true })
   };
 }
 
@@ -1217,17 +1392,32 @@ export async function checkpointTask(
   rootDir: string,
   options: TaskCheckpointOptions = {}
 ): Promise<TaskCommandResult<TaskCheckpoint>> {
-  await loadAIWikiConfig(rootDir);
+  const config = await loadAIWikiConfig(rootDir);
   const id = await resolveTaskId(rootDir);
-  const files = options.fromGitDiff ? await gitChangedFiles(rootDir) : [];
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    LOCAL_ARTIFACT_IGNORE,
+    config.ignore
+  );
+  const files = options.fromGitDiff === false
+    ? []
+    : await gitChangedFiles(rootDir, ignoreRules);
+  const explicitTests = splitList(options.tests);
+  const tests = explicitTests.length > 0
+    ? explicitTests
+    : await suggestedTests(rootDir, files);
+  const explicitNext = splitList(options.next);
+  const next = explicitNext.length > 0
+    ? explicitNext
+    : inferredNextSteps(files, tests);
   const checkpoint: TaskCheckpoint = {
     time: now(),
     type: "checkpoint",
     message: options.message,
     step: options.step,
     status: options.status,
-    tests: splitList(options.tests),
-    next: splitList(options.next),
+    tests,
+    next,
     files
   };
 
@@ -1235,7 +1425,20 @@ export async function checkpointTask(
 
   return {
     data: checkpoint,
-    markdown: `# Checkpoint Recorded\n\n- Task ID: ${id}\n- ${checkpointLine(checkpoint)}\n`,
+    markdown: `# Checkpoint Recorded
+
+- Task ID: ${id}
+- ${checkpointLine(checkpoint)}
+
+## Changed Files
+${bulletList(files, "No changed files captured.")}
+
+## Tests
+${bulletList(tests, "No tests or suggested tests recorded.")}
+
+## Next Actions
+${bulletList(next, "No next action recorded.")}
+`,
     json: toJson(checkpoint)
   };
 }

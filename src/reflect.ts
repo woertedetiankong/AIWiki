@@ -7,8 +7,15 @@ import {
   createDefaultConfig,
   loadAIWikiConfig
 } from "./config.js";
-import { REFLECT_EVALS_PATH, RISK_FILE_KEYWORDS } from "./constants.js";
+import {
+  LOCAL_ARTIFACT_IGNORE,
+  REFLECT_EVALS_PATH,
+  RISK_FILE_KEYWORDS
+} from "./constants.js";
+import { collectProjectIgnoreRules, shouldIgnorePath } from "./ignore.js";
+import type { IgnoreRule } from "./ignore.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { saveRawNote } from "./raw-notes.js";
 import { diffRiskLessonsFromChanges } from "./risk-rules.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
@@ -25,6 +32,7 @@ export interface ReflectOptions {
   outputPlan?: string;
   force?: boolean;
   readOnly?: boolean;
+  saveRaw?: boolean;
 }
 
 export interface ReflectSection {
@@ -37,6 +45,7 @@ export interface ReflectPreview {
   initialized: boolean;
   fromGitDiff: boolean;
   notesPath?: string;
+  rawNotePath?: string;
   changedFiles: string[];
   selectedDocs: string[];
   outputPlanPath?: string;
@@ -108,6 +117,20 @@ function titleCase(value: string): string {
 
 function normalizeChangedFile(filePath: string): string {
   return toPosixPath(filePath).replace(/^\.\//u, "");
+}
+
+function normalizeProjectChangedFile(rootDir: string, filePath: string): string {
+  const root = path.resolve(rootDir);
+  const absolutePath = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(root, filePath);
+  const relativePath = path.relative(root, absolutePath);
+
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return normalizeChangedFile(filePath);
+  }
+
+  return normalizeChangedFile(relativePath);
 }
 
 function defaultProjectName(rootDir: string): string {
@@ -188,18 +211,22 @@ async function readGitStatus(rootDir: string): Promise<string> {
   }
 }
 
-async function walkChangedDirectory(rootDir: string, relativeDir: string): Promise<string[]> {
+async function walkChangedDirectory(
+  rootDir: string,
+  relativeDir: string,
+  ignoreRules: readonly IgnoreRule[]
+): Promise<string[]> {
   const directory = resolveProjectPath(rootDir, relativeDir);
   const entries = await readdir(directory, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
     const relativePath = normalizeChangedFile(path.posix.join(relativeDir, entry.name));
-    if (entry.name === ".git" || entry.name === "node_modules") {
+    if (entry.name === ".git" || shouldIgnorePath(relativePath, ignoreRules)) {
       continue;
     }
 
     if (entry.isDirectory()) {
-      files.push(...(await walkChangedDirectory(rootDir, relativePath)));
+      files.push(...(await walkChangedDirectory(rootDir, relativePath, ignoreRules)));
     } else if (entry.isFile()) {
       files.push(relativePath);
     }
@@ -208,15 +235,23 @@ async function walkChangedDirectory(rootDir: string, relativeDir: string): Promi
   return files;
 }
 
-async function filterChangedFileList(rootDir: string, files: string[]): Promise<string[]> {
+async function filterChangedFileList(
+  rootDir: string,
+  files: string[],
+  ignoreRules: readonly IgnoreRule[]
+): Promise<string[]> {
   const filtered: string[] = [];
   for (const file of files) {
+    if (shouldIgnorePath(file, ignoreRules)) {
+      continue;
+    }
+
     try {
       const fileStat = await stat(resolveProjectPath(rootDir, file));
       if (fileStat.isFile()) {
         filtered.push(file);
       } else if (fileStat.isDirectory()) {
-        filtered.push(...(await walkChangedDirectory(rootDir, file)));
+        filtered.push(...(await walkChangedDirectory(rootDir, file, ignoreRules)));
       }
     } catch {
       // Keep deleted files from git status/diff so memory can still be refreshed.
@@ -224,7 +259,7 @@ async function filterChangedFileList(rootDir: string, files: string[]): Promise<
     }
   }
 
-  return filtered;
+  return unique(filtered).sort();
 }
 
 async function readNotes(rootDir: string, notesPath: string | undefined): Promise<string> {
@@ -316,7 +351,29 @@ function moduleFiles(moduleName: string, files: string[]): string[] {
   });
 }
 
-function relatedModules(results: SearchResult[], files: string[]): string[] {
+function inferredModuleSummary(moduleName: string, files: string[]): string {
+  if (moduleName === "beads") {
+    return "AIWiki can surface optional Beads context by reading `bd ready --json` and `bd status --json` when `.beads/` exists, without writing to Beads or reimplementing its task database.";
+  }
+
+  if (moduleName === "ingest") {
+    return "`ingest` is a compatibility path; durable note capture should flow through `reflect --notes --save-raw` and the shared raw-notes service.";
+  }
+
+  if (moduleName === "notes") {
+    return "Raw note persistence belongs in a shared service so notes can be preserved for review without mixing one-off source notes into curated wiki pages.";
+  }
+
+  return files.length > 0
+    ? `Reflection candidate for ${moduleName} from changed files: ${files.join(", ")}.`
+    : `Reflection candidate for ${moduleName} from recent changed files.`;
+}
+
+function relatedModules(
+  results: SearchResult[],
+  files: string[],
+  options: { includePathCandidates?: boolean } = {}
+): string[] {
   const memoryModules = results.flatMap((result) => {
     if (result.page.frontmatter.type === "module") {
       return [
@@ -329,7 +386,10 @@ function relatedModules(results: SearchResult[], files: string[]): string[] {
     return result.page.frontmatter.modules ?? [];
   });
 
-  return unique([...memoryModules, ...pathModuleCandidates(files)]).sort();
+  const pathModules = options.includePathCandidates === false
+    ? []
+    : pathModuleCandidates(files);
+  return unique([...memoryModules, ...pathModules]).sort();
 }
 
 function docs(results: SearchResult[]): string[] {
@@ -409,15 +469,17 @@ function includesAny(value: string, words: string[]): boolean {
   return words.some((word) => normalizedValue.includes(word));
 }
 
-function addedLinesByFile(diff: string): Map<string, string[]> {
+function addedLinesByFile(diff: string, allowedFiles: readonly string[]): Map<string, string[]> {
   const linesByFile = new Map<string, string[]>();
+  const allowed = new Set(allowedFiles.map(normalizeChangedFile));
   let currentFile: string | undefined;
 
   for (const line of diff.split("\n")) {
     const fileMatch = /^diff --git a\/(.+) b\/(.+)$/u.exec(line);
     if (fileMatch) {
-      currentFile = normalizeChangedFile(fileMatch[2]);
-      if (!linesByFile.has(currentFile)) {
+      const nextFile = normalizeChangedFile(fileMatch[2]);
+      currentFile = allowed.has(nextFile) ? nextFile : undefined;
+      if (currentFile && !linesByFile.has(currentFile)) {
         linesByFile.set(currentFile, []);
       }
       continue;
@@ -465,7 +527,7 @@ function extractDiffLessons(diff: string, changedFiles: string[]): DiffLesson[] 
 
   const lessons: DiffLesson[] = [];
   const seen = new Set<string>();
-  const linesByFile = addedLinesByFile(diff);
+  const linesByFile = addedLinesByFile(diff, changedFiles);
   const allAddedText = [...linesByFile.values()].flat().join("\n");
   const taskFiles = lessonFiles(changedFiles, [
     "src/task.ts",
@@ -533,14 +595,44 @@ function extractDiffLessons(diff: string, changedFiles: string[]): DiffLesson[] 
     }, changedFiles, taskFiles));
   }
 
+  if (includesAny(taskText, ["next action", "下一步做什么", "suggested test command", "--no-from-git-diff"])) {
+    addLesson(lessonFrom({
+      type: "pattern",
+      title: "Task checkpoints feed resume handoffs",
+      modules: ["task"],
+      summary: "`checkpoint` should capture changed files, suggested tests, and next actions so `resume` can start with the concrete next step for a fresh agent session.",
+      tags: ["handoff", "cross-session"]
+    }, changedFiles, taskFiles));
+  }
+
   if (includesAny(primeText, ["aiwiki prime", "generateprimecontext", "active task", "ready work", "memory health"])) {
     addLesson(lessonFrom({
       type: "module",
       title: "Prime",
       modules: ["prime"],
-      summary: "`aiwiki prime` is the Codex startup dashboard for active task, ready work, memory health, and next commands.",
+      summary: "`aiwiki prime` is the Codex startup dashboard for active task, ready work, guard targets, memory health, optional Beads context, and next commands.",
       tags: ["codex", "startup"]
     }, changedFiles, primeFiles));
+  }
+
+  if (includesAny(allAddedText, ["readbeadscontext", ".beads", "bd ready", "bd status", "beads_ready_work"])) {
+    addLesson(lessonFrom({
+      type: "module",
+      title: "Beads",
+      modules: ["beads"],
+      summary: "AIWiki can surface optional Beads context by reading `bd ready --json` and `bd status --json` when `.beads/` exists, without writing to Beads or reimplementing its task database.",
+      tags: ["beads", "integration", "read-only"]
+    }, changedFiles, ["src/beads.ts", "src/prime.ts", "tests/prime.test.ts", "README.md", "SPEC.md"]));
+  }
+
+  if (includesAny(allAddedText, ["saverawnote", "raw-notes", "reflect --notes --save-raw", "compatibility path; prefer reflect --notes --save-raw"])) {
+    addLesson(lessonFrom({
+      type: "module",
+      title: "Ingest",
+      modules: ["ingest", "reflect"],
+      summary: "`ingest` is a compatibility path; durable note capture should flow through `reflect --notes --save-raw` and the shared raw-notes service.",
+      tags: ["notes", "compatibility", "reflect"]
+    }, changedFiles, ["src/ingest.ts", "src/raw-notes.ts", "src/reflect.ts", "tests/ingest.test.ts", "README.md"]));
   }
 
   if (includesAny(schemaText, ["task-event", "agent-facing", "schema name", "aiwiki prime context"])) {
@@ -583,7 +675,8 @@ function extractDiffLessons(diff: string, changedFiles: string[]): DiffLesson[] 
 function appendEntryForPage(
   page: WikiPage,
   noteSummary: string | undefined,
-  changedFiles: string[]
+  changedFiles: string[],
+  rawNotePath?: string
 ): WikiUpdatePlanEntry {
   const summary = noteSummary ?? "Reflect reviewed recent changes for this existing memory page.";
   return {
@@ -599,6 +692,7 @@ function appendEntryForPage(
           changedFiles.length > 0
             ? `Changed files reviewed: ${changedFiles.join(", ")}.`
             : undefined,
+          rawNotePath ? `Source note: ${rawNotePath}.` : undefined,
           "Review this append section before confirming the wiki update."
         ].filter(Boolean).join("\n\n")
       }
@@ -614,7 +708,8 @@ function buildReflectUpdatePlanDraft(
   modules: string[],
   riskyFiles: string[],
   refreshPages: WikiPage[],
-  diffLessons: DiffLesson[]
+  diffLessons: DiffLesson[],
+  rawNotePath?: string
 ): WikiUpdatePlan | undefined {
   const entries: WikiUpdatePlanEntry[] = [];
   for (const lesson of diffLessons.slice(0, 8)) {
@@ -632,45 +727,51 @@ function buildReflectUpdatePlanDraft(
     });
   }
 
-  for (const page of refreshPages.slice(0, 5)) {
-    entries.push(appendEntryForPage(
-      page,
-      noteSummary ?? "Refresh this memory page because referenced files changed.",
-      changedFiles
-    ));
-  }
-
-  const matchedPages = pagesOfType(results, "pitfall")
-    .concat(pagesOfType(results, "decision"))
-    .concat(pagesOfType(results, "pattern"))
-    .slice(0, 3);
+  const hasExplicitNotes = notes.trim().length > 0 || Boolean(rawNotePath);
+  const matchedPages = hasExplicitNotes
+    ? pagesOfType(results, "pitfall")
+      .concat(pagesOfType(results, "decision"))
+      .concat(pagesOfType(results, "pattern"))
+      .slice(0, 3)
+    : [];
 
   for (const page of matchedPages) {
-    entries.push(appendEntryForPage(page, noteSummary, changedFiles));
+    entries.push(appendEntryForPage(page, noteSummary, changedFiles, rawNotePath));
   }
 
+  const existingModulePages = [
+    ...pagesOfType(results, "module"),
+    ...refreshPages.filter((page) => page.frontmatter.type === "module")
+  ];
   const existingModuleNames = new Set(
-    pagesOfType(results, "module").flatMap((page) => [
+    existingModulePages.flatMap((page) => [
       ...(page.frontmatter.modules ?? []),
       page.frontmatter.title,
       pageTitle(page)
     ])
   );
 
-  const newModuleCandidates = modules
-    .filter((moduleName) => !existingModuleNames.has(moduleName))
-    .map((moduleName) => ({
-      moduleName,
-      files: moduleFiles(moduleName, changedFiles)
-    }))
-    .sort((a, b) => {
-      if (b.files.length !== a.files.length) {
-        return b.files.length - a.files.length;
-      }
+  const shouldInferNewModules =
+    Boolean(noteSummary) ||
+    diffLessons.length > 0 ||
+    riskyFiles.length > 0 ||
+    Boolean(rawNotePath);
+  const newModuleCandidates = shouldInferNewModules
+    ? modules
+        .filter((moduleName) => !existingModuleNames.has(moduleName))
+        .map((moduleName) => ({
+          moduleName,
+          files: moduleFiles(moduleName, changedFiles)
+        }))
+        .sort((a, b) => {
+          if (b.files.length !== a.files.length) {
+            return b.files.length - a.files.length;
+          }
 
-      return a.moduleName.localeCompare(b.moduleName);
-    })
-    .slice(0, 3);
+          return a.moduleName.localeCompare(b.moduleName);
+        })
+        .slice(0, 3)
+    : [];
 
   for (const candidate of newModuleCandidates) {
     entries.push({
@@ -680,11 +781,10 @@ function buildReflectUpdatePlanDraft(
       source: "reflect",
       modules: [candidate.moduleName],
       files: candidate.files,
+      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
       summary: noteSummary
         ? `Reflection candidate from recent work: ${noteSummary}.`
-        : candidate.files.length > 0
-          ? `Reflection candidate for ${candidate.moduleName} from changed files: ${candidate.files.join(", ")}.`
-          : `Reflection candidate for ${candidate.moduleName} from recent changed files.`
+        : inferredModuleSummary(candidate.moduleName, candidate.files)
     });
   }
 
@@ -698,6 +798,7 @@ function buildReflectUpdatePlanDraft(
       modules,
       files: riskyFiles,
       severity: "high",
+      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
       summary: "Review whether this high-risk file change introduced a reusable pitfall before confirming."
     });
   }
@@ -710,6 +811,7 @@ function buildReflectUpdatePlanDraft(
       source: "reflect",
       modules,
       files: changedFiles,
+      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
       summary: "Review whether this note records a durable product or architecture decision."
     });
   }
@@ -722,6 +824,7 @@ function buildReflectUpdatePlanDraft(
       source: "reflect",
       modules,
       files: changedFiles,
+      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
       summary: "Review whether this note describes a reusable implementation pattern."
     });
   }
@@ -736,6 +839,7 @@ function buildReflectUpdatePlanDraft(
       modules,
       files: changedFiles,
       severity: riskyFiles.length > 0 ? "high" : "medium",
+      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
       summary: "Review whether this lesson is stable enough to become a proposed project rule."
     });
   }
@@ -749,9 +853,13 @@ function buildReflectUpdatePlanDraft(
     return undefined;
   }
 
+  const lessonTitle = diffLessons.length > 0
+    ? `Reflect: ${diffLessons.slice(0, 3).map((lesson) => lesson.title).join("; ")}`
+    : undefined;
+
   return {
     version: "0.1.0",
-    title: noteSummary ? `Reflect: ${noteSummary}` : "Reflect update candidates",
+    title: noteSummary ? `Reflect: ${noteSummary}` : lessonTitle ?? "Reflect update candidates",
     entries: dedupedEntries
   };
 }
@@ -823,6 +931,8 @@ export function formatReflectPreviewMarkdown(preview: ReflectPreview): string {
     {
       title: "Update Plan Draft",
       items: [
+        "An update plan is a reviewable JSON draft of candidate wiki writes; reflect creates the draft, but does not apply it.",
+        "Preview the plan with `aiwiki apply <plan.json>` and only add `--confirm` after the operations look right.",
         draftLine.replace(/^- /u, ""),
         ...limitItems(candidateWrites, 5)
       ]
@@ -883,7 +993,8 @@ async function appendReflectEvalCase(
     command: "reflect",
     input: {
       fromGitDiff: preview.fromGitDiff,
-      notesPath: preview.notesPath
+      notesPath: preview.notesPath,
+      rawNotePath: preview.rawNotePath
     },
     changedFiles: preview.changedFiles,
     selectedDocs: preview.selectedDocs,
@@ -900,6 +1011,12 @@ export async function generateReflectPreview(
 ): Promise<ReflectResult> {
   if (options.readOnly && options.outputPlan) {
     throw new Error("Cannot use --read-only with --output-plan because --output-plan writes a file.");
+  }
+  if (options.readOnly && options.saveRaw) {
+    throw new Error("Cannot use --read-only with --save-raw because --save-raw writes a raw note copy.");
+  }
+  if (options.saveRaw && !options.notes) {
+    throw new Error("reflect --save-raw requires --notes <path>.");
   }
 
   let initialized = true;
@@ -918,8 +1035,19 @@ export async function generateReflectPreview(
   if (!initialized && options.outputPlan) {
     throw new Error("Cannot use --output-plan before AIWiki is initialized. Run aiwiki init --project-name <name> first.");
   }
+  if (!initialized && options.saveRaw) {
+    throw new Error("Cannot use --save-raw before AIWiki is initialized. Run aiwiki init --project-name <name> first.");
+  }
 
+  const ignoreRules = await collectProjectIgnoreRules(
+    rootDir,
+    LOCAL_ARTIFACT_IGNORE,
+    config.ignore
+  );
   const notes = await readNotes(rootDir, options.notes);
+  const savedRawNote = options.saveRaw && options.notes
+    ? await saveRawNote(rootDir, options.notes, notes, { force: options.force })
+    : undefined;
   if (options.fromGitDiff && !(await isGitRepository(rootDir))) {
     throw new Error(
       "reflect --from-git-diff requires a Git repository. Run git init, use --notes <path>, or skip reflect until code changes are tracked."
@@ -927,10 +1055,18 @@ export async function generateReflectPreview(
   }
   const diff = options.fromGitDiff ? await readGitDiff(rootDir) : "";
   const status = options.fromGitDiff ? await readGitStatus(rootDir) : "";
+  const ignoredChangedFiles = new Set(
+    [
+      options.outputPlan ? normalizeProjectChangedFile(rootDir, options.outputPlan) : undefined,
+      savedRawNote?.rawNotePath
+    ].filter((file): file is string => Boolean(file))
+  );
   const changedFiles = await filterChangedFileList(rootDir, unique([
     ...extractChangedFiles(diff),
     ...extractStatusChangedFiles(status)
-  ]).sort());
+  ])
+    .filter((file) => !ignoredChangedFiles.has(file))
+    .sort(), ignoreRules);
   const diffLessons = extractDiffLessons(diff, changedFiles);
   const query = searchQuery(changedFiles, notes);
   const search = query.length > 0
@@ -941,13 +1077,20 @@ export async function generateReflectPreview(
   const results = search.results;
   const refreshPages = await pagesReferencingChangedFiles(rootDir, changedFiles);
   const selectedDocs = unique([...docs(results), ...refreshPages.map(pageDoc)]);
-  const modules = relatedModules(results, changedFiles);
   const riskyFiles = highRiskChangedFiles(changedFiles);
+  const noteSummary = firstNonEmptyLine(notes);
+  const includePathModuleCandidates =
+    Boolean(noteSummary) ||
+    diffLessons.length > 0 ||
+    riskyFiles.length > 0 ||
+    Boolean(savedRawNote?.rawNotePath);
+  const modules = relatedModules(results, changedFiles, {
+    includePathCandidates: includePathModuleCandidates
+  });
   const matchingPitfalls = matchingTitles(results, "pitfall");
   const matchingDecisions = matchingTitles(results, "decision");
   const matchingPatterns = matchingTitles(results, "pattern");
   const matchingRules = matchingTitles(results, "rule");
-  const noteSummary = firstNonEmptyLine(notes);
   const updatePlanDraft = initialized
     ? buildReflectUpdatePlanDraft(
         noteSummary,
@@ -957,7 +1100,8 @@ export async function generateReflectPreview(
         modules,
         riskyFiles,
         refreshPages,
-        diffLessons
+        diffLessons,
+        savedRawNote?.rawNotePath
       )
     : undefined;
 
@@ -966,6 +1110,7 @@ export async function generateReflectPreview(
     initialized,
     fromGitDiff: options.fromGitDiff ?? false,
     notesPath: options.notes,
+    rawNotePath: savedRawNote?.rawNotePath,
     changedFiles,
     selectedDocs,
     updatePlanDraft,
@@ -975,6 +1120,7 @@ export async function generateReflectPreview(
         fallback(
           [
             noteSummary ? `Notes summary: ${noteSummary}` : undefined,
+            savedRawNote ? `Raw note copied to ${savedRawNote.rawNotePath}.` : undefined,
             initialized
               ? undefined
               : "Cold-start mode: no .aiwiki memory was loaded and no AIWiki files were written.",

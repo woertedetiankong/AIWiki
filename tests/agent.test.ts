@@ -49,7 +49,7 @@ describe("generateAgentContext", () => {
     };
 
     expect(result.markdown).toContain("# AIWiki Agent Context");
-    expect(result.markdown).toContain("Read-only context only");
+    expect(result.markdown).toContain("Context lookup is read-only");
     expect(parsed.guardTargets).toContain("src/brief.ts");
     expect(parsed.nextCommands.join("\n")).toContain("aiwiki guard src/brief.ts");
     expect(await readFile(path.join(rootDir, ".aiwiki", "log.md"), "utf8")).toBe(initialLog);
@@ -75,5 +75,65 @@ describe("generateAgentContext", () => {
 
     expect(stdout).toContain("# AIWiki Agent Context");
     expect(stdout).toContain("aiwiki guard src/brief.ts");
+  });
+
+  it("exposes runbook mode through the agent command", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addAgentMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "brief.ts"), "export const brief = true;\n", "utf8");
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", tsxLoader, cliPath, "agent", "improve brief workflow", "--runbook"],
+      { cwd: rootDir }
+    );
+
+    expect(stdout).toContain("# Codex AIWiki Runbook");
+    expect(stdout).toContain("aiwiki guard src/brief.ts");
+    expect(
+      await readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")
+    ).toContain("improve-brief-workflow");
+    expect(
+      await readFile(path.join(rootDir, ".aiwiki", "wiki", "project-map.md"), "utf8")
+    ).toContain("# Project Map");
+  });
+
+  it("exposes team runbook mode through the agent command", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addAgentMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "brief.ts"), "export const brief = true;\n", "utf8");
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        tsxLoader,
+        cliPath,
+        "agent",
+        "improve brief workflow",
+        "--runbook",
+        "--team",
+        "--format",
+        "json"
+      ],
+      { cwd: rootDir }
+    );
+    const parsed = JSON.parse(stdout) as {
+      team?: { enabled: boolean };
+    };
+
+    expect(parsed.team?.enabled).toBe(true);
   });
 });

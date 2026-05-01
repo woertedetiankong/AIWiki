@@ -1,12 +1,18 @@
+import { execFile } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
+import { readBeadsContext } from "./beads.js";
+import type { BeadsContext, BeadsItem } from "./beads.js";
 import { doctorWiki } from "./doctor.js";
 import {
   AIWikiNotInitializedError,
   createDefaultConfig,
   loadAIWikiConfig
 } from "./config.js";
-import { listTasks, readyTasks } from "./task.js";
+import { getTaskStatus, listTasks, readyTasks } from "./task.js";
 import type { TaskMetadata } from "./types.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface PrimeOptions {
   limit?: number;
@@ -19,7 +25,9 @@ export interface PrimeAction {
     | "memory_health"
     | "start_context"
     | "initialize_memory"
-    | "build_project_map";
+    | "build_project_map"
+    | "guard_target"
+    | "beads_ready_work";
   title: string;
   reason: string;
   command: string;
@@ -36,6 +44,8 @@ export interface PrimeContext {
     staleWarnings: number;
     nextActions: string[];
   };
+  guardTargets: string[];
+  beads?: BeadsContext;
   actions: PrimeAction[];
 }
 
@@ -54,6 +64,57 @@ function taskLine(task: TaskMetadata): string {
   const type = task.type ?? "task";
   const assignee = task.assignee ? `assignee ${task.assignee}` : "unclaimed";
   return `${task.id} | ${task.title} | ${priority} | ${type} | ${assignee}`;
+}
+
+function beadsLine(item: BeadsItem): string {
+  return [
+    item.id,
+    item.title,
+    item.priority === undefined ? undefined : `P${item.priority}`,
+    item.status
+  ].filter(Boolean).join(" | ");
+}
+
+function markdownBulletItems(markdown: string): string[] {
+  return markdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("- "))
+    .map((line) => line.replace(/^- /u, ""))
+    .filter((line) => !line.startsWith("No ") && line !== "None recorded.");
+}
+
+function statusFile(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const renamed = /^R\s+(.+?)\s+->\s+(.+)$/u.exec(trimmed);
+  if (renamed) {
+    return renamed[2];
+  }
+  const match = /^(?:[ MADRCU?!]{2})\s+(.+)$/u.exec(line);
+  return match?.[1];
+}
+
+async function gitStatusFiles(rootDir: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync("git", ["status", "--short"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    });
+    return [...new Set(stdout.split("\n").map(statusFile).filter((file): file is string => Boolean(file)))]
+      .filter(usefulGuardTarget)
+      .slice(0, 5);
+  } catch {
+    return [];
+  }
+}
+
+function usefulGuardTarget(file: string): boolean {
+  return file.length > 0 &&
+    !file.startsWith(".aiwiki/") &&
+    !file.endsWith(".md");
 }
 
 function memoryHealthReason(memoryHealth: PrimeContext["memoryHealth"]): string {
@@ -115,6 +176,24 @@ function buildActions(context: Omit<PrimeContext, "actions">): PrimeAction[] {
     });
   }
 
+  for (const target of context.guardTargets.slice(0, 2)) {
+    actions.push({
+      kind: "guard_target",
+      title: target,
+      reason: "Changed or resumed file should be guarded before the next edit.",
+      command: `aiwiki guard ${target}`
+    });
+  }
+
+  for (const item of context.beads?.ready.slice(0, 2) ?? []) {
+    actions.push({
+      kind: "beads_ready_work",
+      title: item.title ?? item.id ?? "Beads ready work",
+      reason: "Beads reports this work item as unblocked.",
+      command: item.id ? `bd show ${item.id}` : "bd ready --json"
+    });
+  }
+
   if (
     context.memoryHealth.lintErrors > 0 ||
     context.memoryHealth.staleWarnings > 0
@@ -160,6 +239,28 @@ function formatPrimeMarkdown(context: PrimeContext): string {
     "## Ready Work",
     bulletList(context.readyTasks.map(taskLine), "No open unblocked tasks."),
     "",
+    "## Guard Targets",
+    bulletList(context.guardTargets.map((target) => `aiwiki guard ${target}`), "No changed or resumed file targets detected."),
+    "",
+    ...(context.beads?.detected
+      ? [
+          "## Beads",
+          context.beads.available
+            ? "- .beads detected; read-only bd context is available."
+            : "- .beads detected, but bd CLI output was unavailable.",
+          context.beads.statusSummary ? `- Status: ${context.beads.statusSummary}` : undefined,
+          ...(
+            context.beads.ready.length > 0
+              ? [
+                  "- Ready work:",
+                  ...context.beads.ready.map((item) => `  - ${beadsLine(item)}`)
+                ]
+              : ["- Ready work: none detected."]
+          ),
+          ...context.beads.warnings.map((warning) => `- Warning: ${warning}`),
+          ""
+        ].filter((line): line is string => Boolean(line))
+      : []),
     "## Memory Health",
     `- Lint errors: ${context.memoryHealth.lintErrors}`,
     `- Lint warnings: ${context.memoryHealth.lintWarnings}`,
@@ -204,6 +305,18 @@ export async function generatePrimeContext(
   const activeTask = taskList?.data.tasks.find(
     (task) => task.id === taskList.data.activeTaskId
   );
+  const activeStatus = initialized && activeTask
+    ? await getTaskStatus(rootDir, activeTask.id)
+    : undefined;
+  const statusGuardTargets = activeStatus
+    ? markdownBulletItems(activeStatus.data.changedFiles)
+    : [];
+  const workingTreeGuardTargets = await gitStatusFiles(rootDir);
+  const guardTargets = [...new Set([
+    ...statusGuardTargets,
+    ...workingTreeGuardTargets
+  ])].filter(usefulGuardTarget).slice(0, 5);
+  const beads = await readBeadsContext(rootDir, options.limit ?? 5);
   const baseContext: Omit<PrimeContext, "actions"> = {
     projectName: config.projectName,
     initialized,
@@ -217,7 +330,9 @@ export async function generatePrimeContext(
         "Run `aiwiki init --project-name <name>` to create local project memory.",
         "Run `aiwiki map --write` after initialization to seed durable project context."
       ]
-    }
+    },
+    guardTargets,
+    beads
   };
   const context: PrimeContext = {
     ...baseContext,

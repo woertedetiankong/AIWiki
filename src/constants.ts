@@ -37,6 +37,7 @@ export const DEFAULT_RULES_TARGETS = {
 } as const;
 
 export const DEFAULT_IGNORE = [
+  AIWIKI_DIR,
   ".env*",
   "node_modules",
   ".git",
@@ -202,6 +203,14 @@ export const GENERATED_FILE_CANDIDATES = [
   "yarn.lock",
   "tsconfig.tsbuildinfo",
   "*.zip"
+] as const;
+
+export const LOCAL_ARTIFACT_IGNORE = [
+  AIWIKI_DIR,
+  ...DEFAULT_IGNORE,
+  ...GENERATED_FILE_CANDIDATES,
+  "package-lock.json",
+  "npm-shrinkwrap.json"
 ] as const;
 
 export const IMPORTANT_DIRECTORY_CANDIDATES = [

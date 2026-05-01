@@ -33,6 +33,7 @@ These should be treated as the primary workflow:
 
 ```bash
 aiwiki prime
+aiwiki agent "<task>"
 aiwiki brief "<task>"
 aiwiki guard <file>
 aiwiki checkpoint ...
@@ -172,10 +173,13 @@ aiwiki schema all --format json
 Implemented behavior:
 
 - `agent` internally runs a compact `brief`;
+- `agent` now starts or reuses the active AIWiki task and writes a project map
+  when one is missing, unless `--no-task` or `--no-map` is used;
 - includes architecture guard signals when useful;
 - suggests the top files where `guard` should be run next;
 - prints the next 2-3 commands, not the entire command surface;
-- is read-only by design so context gathering can avoid runtime writes.
+- keeps context lookup read-only, while the CLI entry point owns lightweight
+  task/project-map preparation for Codex.
 - `prime` summarizes active work, ready work, memory health, and next commands.
 - `schema` exposes machine-readable task/event/prime contracts.
 

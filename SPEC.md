@@ -161,8 +161,9 @@ AIWiki is easiest to extend when kept in these layers:
 
 Required:
 
-- Node.js 20 or newer.
+- Node.js 20, 22, or 24.
 - Local filesystem.
+- SQLite support through `better-sqlite3` for derived hybrid indexes.
 - TypeScript runtime/build toolchain for development.
 
 Optional:
@@ -472,6 +473,8 @@ Behavior:
 - MUST produce a compact read-only startup dashboard for Codex.
 - MUST include active task information when present.
 - MUST include ready unblocked open tasks.
+- MUST include guard targets inferred from active task changed files and current working-tree changes.
+- SHOULD include read-only Beads ready/status context when `.beads/` exists and the `bd` CLI is available.
 - MUST include AIWiki memory health summary derived from doctor checks.
 - MUST include a short next-action list with runnable commands.
 - MUST NOT write files.
@@ -489,6 +492,29 @@ Behavior:
 - MUST expose stable machine-readable schemas for agent-facing data surfaces.
 - MUST support schemas for task metadata, task events, and prime context.
 - Markdown output MAY summarize available schemas; JSON output MUST include the schema objects.
+
+### 6.1c `aiwiki agent`
+
+Usage:
+
+```bash
+aiwiki agent "<task>" [--runbook] [--team] [--no-task] [--no-map]
+                    [--limit <n>] [--with-graphify] [--architecture-guard]
+                    [--format markdown|json]
+```
+
+Behavior:
+
+- MUST generate compact agent context by default.
+- MUST generate the Codex runbook when `--runbook` is provided.
+- MUST treat `--team` as a runbook request with team coordination guidance.
+- MUST start or reuse an active AIWiki task by default so later `checkpoint` and `resume`
+  commands work without a separate `task start`.
+- MUST support `--no-task` to skip automatic task start/claim.
+- MUST write `.aiwiki/wiki/project-map.md` by default when the project map is missing.
+- MUST support `--no-map` to skip project-map bootstrap.
+- MUST keep `aiwiki codex "<task>"` as a hidden compatibility alias for
+  `aiwiki agent "<task>" --runbook`.
 
 ### 6.2 `aiwiki search`
 
@@ -648,6 +674,8 @@ Behavior:
 - MUST NOT write structured wiki pages.
 - MUST read git diff only when `--from-git-diff` is provided.
 - MUST include untracked project files from `git status` when `--from-git-diff` is provided.
+- MUST ignore local artifacts from changed-file capture, including `.aiwiki/`, virtualenvs,
+  dependency directories, build outputs, and generated lockfile churn.
 - MUST read notes only from a project-local path.
 - MUST extract changed files from git diff.
 - MUST search memory using changed files and note text.
@@ -665,8 +693,13 @@ Behavior:
 - MUST generate an `updatePlanDraft` when reusable wiki updates can be inferred.
 - SHOULD extract concrete reusable lessons from changed files when safe local heuristics can infer
   them, including work graph behavior, structured JSON errors, and semantic risk lessons.
-- SHOULD suggest append refresh entries for wiki pages whose `files` frontmatter references changed
+- SHOULD report freshness refreshes for wiki pages whose `files` frontmatter references changed
   files.
+- SHOULD NOT generate generic append-only update plan entries solely because a referenced file
+  changed; update plan entries should contain explicit notes or a concrete reusable lesson inferred
+  from the diff.
+- SHOULD NOT generate generic module drafts for fresh repositories solely from path names; new
+  module candidates need notes, high-risk files, or concrete diff lessons.
 - `--output-plan` MUST write the update plan draft to a project-local JSON file.
 - `--output-plan` MUST NOT overwrite an existing file unless `--force` is provided.
 - `--output-plan` MUST reject paths outside the project root.
@@ -721,6 +754,11 @@ Behavior:
   - `rule`
 - MUST derive safe kebab-case slugs when not provided.
 - MUST preview operations by default.
+- Markdown preview MUST explain what the plan is, that the preview has not written files, and what
+  the user should confirm before passing `--confirm`.
+- Markdown preview MUST separate planned create/append/skip counts from already-applied results.
+- Markdown preview MUST include a plain-language summary of each candidate memory item before the
+  technical operation details.
 - MUST write only when `--confirm` is provided.
 - MUST skip existing pages unless append sections are explicitly provided.
 - MUST update `.aiwiki/index.md` after confirmed writes.
@@ -998,7 +1036,8 @@ Usage:
 
 ```bash
 aiwiki checkpoint [--message <message>] [--step <step>] [--status <status>]
-                  [--tests <tests>] [--next <next>] [--from-git-diff]
+                  [--summary <summary>] [--tests <tests>] [--next <next>]
+                  [--from-git-diff] [--no-from-git-diff]
                   [--format markdown|json]
 ```
 
@@ -1008,7 +1047,12 @@ Behavior:
 - MUST append a checkpoint event to `checkpoints.jsonl`.
 - MUST update progress, changed files, tests, and resume content as derived summaries from
   `checkpoints.jsonl`.
-- MUST read changed files from git only when `--from-git-diff` is provided.
+- MUST read changed files from git diff/status by default when git is available.
+- MUST ignore local artifacts from automatic changed-file capture.
+- MUST support `--summary` as an alias for `--message`.
+- MUST support `--no-from-git-diff` to skip automatic changed-file capture.
+- SHOULD record suggested test commands and next-action handoff hints when `--tests` or `--next`
+  are omitted.
 - MUST tolerate missing git by recording no changed files instead of crashing.
 
 ### 6.19 `aiwiki resume`
@@ -1023,6 +1067,8 @@ Behavior:
 
 - MUST resolve the provided task ID or active task.
 - MUST generate a resume brief derived from `checkpoints.jsonl`.
+- MUST begin the brief body with a clear next action so a fresh agent can continue before reading
+  the full history.
 - MUST include completed work, in-progress work, not-started work, decisions, blockers, changed
   files, tests, and next recommended steps.
 - MUST remind the next agent not to restart from scratch.
