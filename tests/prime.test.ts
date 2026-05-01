@@ -114,19 +114,17 @@ describe("AIWiki prime", () => {
     const binDir = path.join(rootDir, "bin");
     await mkdir(binDir, { recursive: true });
     const bdPath = path.join(binDir, "bd");
-    await writeFile(
-      bdPath,
-      [
-        "#!/usr/bin/env node",
-        "if (process.argv.includes('ready')) {",
-        "  console.log(JSON.stringify({ issues: [{ id: 'bd-a1b2', title: 'Wire handoff', priority: 1, status: 'open' }] }));",
-        "} else if (process.argv.includes('status')) {",
-        "  console.log(JSON.stringify({ open: 1, in_progress: 0, blocked: 0 }));",
-        "}",
-        ""
-      ].join("\n"),
-      "utf8"
-    );
+    const bdScript = [
+      "#!/usr/bin/env node",
+      "if (process.argv.includes('ready')) {",
+      "  console.log(JSON.stringify({ issues: [{ id: 'bd-a1b2', title: 'Wire handoff', priority: 1, status: 'open' }] }));",
+      "} else if (process.argv.includes('status')) {",
+      "  console.log(JSON.stringify({ open: 1, in_progress: 0, blocked: 0 }));",
+      "}",
+      ""
+    ].join("\n");
+    await writeFile(bdPath, bdScript, "utf8");
+    await writeFile(path.join(binDir, "bd.cmd"), "@echo off\r\nnode \"%~dp0bd\" %*\r\n", "utf8");
     await chmod(bdPath, 0o755);
     const oldPath = process.env.PATH;
     process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
