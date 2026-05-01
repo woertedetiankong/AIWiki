@@ -53,8 +53,8 @@ Note: When reading UTF-8 files in PowerShell, use Get-Content -Encoding UTF8; th
 ## Dogfood Workflow
 
 - When changing Codex-facing workflows, test AIWiki on this repository before calling the work done.
-- Users should not need to remember AIWiki commands. For non-trivial code changes, Codex should proactively run `aiwiki codex "<task>"` or `aiwiki agent "<task>"`, then run `aiwiki guard <file>` before editing concrete source files.
-- For Codex-managed agent teams, use `aiwiki codex "<task>" --team`; AIWiki provides shared memory and handoff guidance but does not create, schedule, or merge agents.
+- Users should not need to remember AIWiki commands. For non-trivial code changes, Codex should proactively run `aiwiki agent "<task>"` or `aiwiki agent "<task>" --runbook`, then run `aiwiki guard <file>` before editing concrete source files.
+- For Codex-managed agent teams, use `aiwiki agent "<task>" --runbook --team`; AIWiki provides shared memory and handoff guidance but does not create, schedule, or merge agents.
 - Prefer a tight loop: run `aiwiki brief "<task>"`, inspect whether the output helps implementation, edit the smallest useful improvement, then run the command again.
 - For file-specific changes, run `aiwiki guard <file>` and verify the output is short, relevant, and actionable.
 - For task-continuity changes, run `aiwiki checkpoint` and `aiwiki resume` and verify the resume brief starts with the true next action.

@@ -1,9 +1,9 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadAIWikiConfig } from "./config.js";
-import { RAW_NOTES_DIR } from "./constants.js";
 import { parseMarkdown } from "./markdown.js";
-import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { resolveProjectPath } from "./paths.js";
+import { normalizeRawNoteSourcePath, saveRawNote } from "./raw-notes.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
 import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
@@ -71,45 +71,6 @@ async function pathExists(filePath: string): Promise<boolean> {
 
     throw error;
   }
-}
-
-function normalizeInputPath(rootDir: string, sourcePath: string): string {
-  const absolutePath = resolveProjectPath(rootDir, sourcePath);
-  return toPosixPath(path.relative(rootDir, absolutePath));
-}
-
-function rawNoteFileName(sourcePath: string): string {
-  const parsed = path.parse(sourcePath);
-  const baseName = parsed.name
-    .replace(/[^a-zA-Z0-9]+/gu, "-")
-    .replace(/^-|-$/gu, "")
-    .toLowerCase();
-  const extension = parsed.ext || ".md";
-  return `${baseName || "note"}${extension}`;
-}
-
-async function nextRawNotePath(
-  rootDir: string,
-  sourcePath: string,
-  force: boolean
-): Promise<string> {
-  const fileName = rawNoteFileName(sourcePath);
-  const parsed = path.parse(fileName);
-  const relativePath = `${RAW_NOTES_DIR}/${fileName}`;
-  const absolutePath = resolveProjectPath(rootDir, relativePath);
-
-  if (force || !(await pathExists(absolutePath))) {
-    return relativePath;
-  }
-
-  for (let index = 2; index < 1000; index += 1) {
-    const candidate = `${RAW_NOTES_DIR}/${parsed.name}-${index}${parsed.ext}`;
-    if (!(await pathExists(resolveProjectPath(rootDir, candidate)))) {
-      return candidate;
-    }
-  }
-
-  throw new Error(`Unable to find available raw note path for ${sourcePath}`);
 }
 
 function firstHeading(body: string): string | undefined {
@@ -346,7 +307,7 @@ export async function generateIngestPreview(
     options.outputPlan,
     options.force ?? false
   );
-  const normalizedSourcePath = normalizeInputPath(rootDir, sourcePath);
+  const normalizedSourcePath = normalizeRawNoteSourcePath(rootDir, sourcePath);
   const sourceAbsolutePath = resolveProjectPath(rootDir, normalizedSourcePath);
   const raw = await readFile(sourceAbsolutePath, "utf8");
   const parsed = parseMarkdown<Record<string, unknown>>(raw);
@@ -360,14 +321,10 @@ export async function generateIngestPreview(
     ...frontmatterList(parsed.frontmatter.tags),
     ...inferTags(raw)
   ]);
-  const rawNotePath = await nextRawNotePath(
-    rootDir,
-    normalizedSourcePath,
-    options.force ?? false
-  );
-  const rawNoteAbsolutePath = resolveProjectPath(rootDir, rawNotePath);
-  await mkdir(path.dirname(rawNoteAbsolutePath), { recursive: true });
-  await writeFile(rawNoteAbsolutePath, raw, "utf8");
+  const savedRawNote = await saveRawNote(rootDir, normalizedSourcePath, raw, {
+    force: options.force
+  });
+  const rawNotePath = savedRawNote.rawNotePath;
 
   const query = unique([
     title,

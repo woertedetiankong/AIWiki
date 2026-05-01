@@ -157,11 +157,58 @@ describe("searchWikiMemory", () => {
     );
 
     const chinese = await searchWikiMemory(rootDir, "编码 工作流");
+    const compactChinese = await searchWikiMemory(rootDir, "编码工作流");
     const mixed = await searchWikiMemory(rootDir, "Codex 编码 工作流");
 
     expect(chinese.results[0]?.title).toBe("Codex 编码工作流");
+    expect(compactChinese.results[0]?.title).toBe("Codex 编码工作流");
     expect(chinese.results[0]?.matchedFields).toContain("title");
     expect(mixed.results[0]?.page.frontmatter.files).toContain("src/brief.ts");
+    expect(formatSearchResponse(chinese, "markdown")).toContain("Codex 编码工作流");
+    expect(formatSearchResponse(chinese, "json")).toContain("编码工作流");
+  });
+
+  it("normalizes Unicode width and ignores single-character CJK noise", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), {
+      recursive: true
+    });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "ai-workflow.md"),
+      {
+        type: "module",
+        title: "AI 编码工作流"
+      },
+      "# AI 编码工作流\n\nAI coding memory.\n"
+    );
+
+    const normalized = await searchWikiMemory(rootDir, "ＡＩ 编码");
+    const singleCharacter = await searchWikiMemory(rootDir, "编");
+
+    expect(normalized.results[0]?.title).toBe("AI 编码工作流");
+    expect(singleCharacter.results).toHaveLength(0);
+  });
+
+  it("expands common Chinese product queries to existing English memory", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "pitfalls"), {
+      recursive: true
+    });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "pitfalls", "command-noise.md"),
+      {
+        type: "pitfall",
+        title: "Command output noise",
+        modules: ["agent"],
+        severity: "medium"
+      },
+      "# Pitfall: Command output noise\n\nDaily commands should stay compact and keep advanced command lists later.\n"
+    );
+
+    const response = await searchWikiMemory(rootDir, "命令表面需要隐藏高级入口");
+
+    expect(response.results[0]?.title).toBe("Command output noise");
+    expect(response.results[0]?.matchedFields).toContain("title");
   });
 
   it("keeps path-heavy English queries useful", async () => {

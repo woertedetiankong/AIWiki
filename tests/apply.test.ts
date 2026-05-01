@@ -55,6 +55,15 @@ describe("applyWikiUpdatePlan", () => {
       "# Module: Payment"
     );
     expect(result.markdown).toContain("# Wiki Update Preview");
+    expect(result.markdown).toContain("## What This Plan Is");
+    expect(result.markdown).toContain("reviewable set of candidate AIWiki memory changes");
+    expect(result.markdown).toContain("## Planned Changes");
+    expect(result.markdown).toContain("- Create wiki pages: 1");
+    expect(result.markdown).toContain("## Memory To Save");
+    expect(result.markdown).toContain("Module note: Payment");
+    expect(result.markdown).toContain("Plain meaning: Stripe and billing flows.");
+    expect(result.markdown).toContain("## Confirm Only If");
+    expect(result.markdown).toContain("## Applied Results");
     expect(result.markdown).toContain("Frontmatter Preview");
     expect(result.markdown).toContain("Body Preview");
 

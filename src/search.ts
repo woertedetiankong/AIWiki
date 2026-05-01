@@ -38,29 +38,78 @@ const SEVERITY_BONUS = {
   critical: 2
 } as const;
 
-function tokenize(query: string): string[] {
-  const normalizedQuery = query.toLowerCase();
-  const pathFriendlyTokens = normalizedQuery
-    .split(/[^\p{Letter}\p{Number}_./-]+/u)
-    .map((token) => token.trim())
-    .filter(Boolean);
-  const cjkRuns = normalizedQuery.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu) ?? [];
-  const cjkTokens = cjkRuns.flatMap((run) => {
-    if (run.length <= 2) {
+const CJK_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_RUN_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
+
+const QUERY_SYNONYMS: Array<{
+  match: RegExp;
+  tokens: string[];
+}> = [
+  { match: /命令|指令|入口|命令行|cli/iu, tokens: ["command", "cli"] },
+  { match: /命令面|命令表面|入口面|指令面/iu, tokens: ["command", "surface"] },
+  { match: /帮助|help/iu, tokens: ["help"] },
+  { match: /隐藏|收束|降噪|噪音|太多/iu, tokens: ["hide", "hidden", "noise", "compact"] },
+  { match: /删除|移除|去掉|精简/iu, tokens: ["delete", "remove", "prune"] },
+  { match: /合并|整合|别名|迁移/iu, tokens: ["merge", "alias", "migration"] },
+  { match: /搜索|检索|召回|查询/iu, tokens: ["search", "retrieval", "query"] },
+  { match: /中文|汉字|cjk|unicode|编码/iu, tokens: ["chinese", "cjk", "unicode"] },
+  { match: /工作流|流程|路径/iu, tokens: ["workflow", "path"] },
+  { match: /记忆|知识|上下文/iu, tokens: ["memory", "context"] },
+  { match: /规则|约束|护栏|风险|踩坑/iu, tokens: ["rule", "guard", "risk", "pitfall"] },
+  { match: /维护|体检|健康|检查/iu, tokens: ["maintenance", "doctor", "lint"] },
+  { match: /测试|验证|回归/iu, tokens: ["test", "verification", "regression"] },
+  { match: /笔记|原始记录|复盘|反思/iu, tokens: ["notes", "raw", "reflect"] }
+];
+
+function normalizeText(value: string): string {
+  return value.normalize("NFKC").toLowerCase();
+}
+
+function isSingleCjkToken(token: string): boolean {
+  const chars = Array.from(token);
+  return chars.length === 1 && CJK_PATTERN.test(chars[0] ?? "");
+}
+
+function cjkTokens(value: string): string[] {
+  const runs = value.match(CJK_RUN_PATTERN) ?? [];
+  return runs.flatMap((run) => {
+    const chars = Array.from(run);
+    if (chars.length < 2) {
+      return [];
+    }
+    if (chars.length === 2) {
       return [run];
     }
 
     return [
       run,
-      ...Array.from({ length: run.length - 1 }, (_, index) => run.slice(index, index + 2))
+      ...chars.slice(0, -1).map((_, index) => `${chars[index]}${chars[index + 1]}`)
     ];
   });
+}
 
-  return [...new Set([...pathFriendlyTokens, ...cjkTokens])];
+function synonymTokens(query: string): string[] {
+  return QUERY_SYNONYMS.flatMap((entry) =>
+    entry.match.test(query) ? entry.tokens : []
+  );
+}
+
+function tokenize(query: string): string[] {
+  const normalizedQuery = normalizeText(query);
+  const pathFriendlyTokens = normalizedQuery
+    .split(/[^\p{Letter}\p{Number}_./-]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0 && !isSingleCjkToken(token));
+
+  return [...new Set([
+    ...pathFriendlyTokens,
+    ...cjkTokens(normalizedQuery),
+    ...synonymTokens(normalizedQuery)
+  ])];
 }
 
 function normalized(value: string): string {
-  return value.toLowerCase();
+  return normalizeText(value);
 }
 
 function extractTitle(page: WikiPage): string {

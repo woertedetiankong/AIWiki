@@ -131,6 +131,7 @@ describe("generateReflectPreview", () => {
     expect(result.markdown).toContain("# Reflect Preview");
     expect(result.markdown).toContain("## Review First");
     expect(result.markdown).toContain("## Update Plan Draft");
+    expect(result.markdown).toContain("An update plan is a reviewable JSON draft");
     expect(result.markdown).toContain("## Lessons to Capture");
     expect(result.markdown.indexOf("## Review First")).toBeLessThan(
       result.markdown.indexOf("## Update Plan Draft")
@@ -152,6 +153,73 @@ describe("generateReflectPreview", () => {
     );
     expect(dryRun.preview.operations[0]?.action).toBe("append");
     expect(dryRun.preview.operations[0]?.source).toBe("reflect");
+  });
+
+  it("can preserve notes as raw source while generating a reflection preview", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addReflectMemory(rootDir);
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Auth fix\n\nAuth route must check permissions server-side.\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      saveRaw: true
+    });
+
+    expect(result.preview.rawNotePath).toBe(".aiwiki/sources/raw-notes/today.md");
+    expect(result.markdown).toContain("Raw note copied to .aiwiki/sources/raw-notes/today.md");
+    expect(result.preview.updatePlanDraft?.entries[0]).toMatchObject({
+      source: "reflect"
+    });
+    expect(await readFile(path.join(rootDir, result.preview.rawNotePath!), "utf8")).toContain(
+      "Auth route must check permissions"
+    );
+  });
+
+  it("does not overwrite reflected raw notes unless force is set", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(rootDir, "notes/today.md", "# Note\n\nFirst.\n");
+
+    const first = await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      saveRaw: true
+    });
+    await writeProjectFile(rootDir, "notes/today.md", "# Note\n\nSecond.\n");
+    const second = await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      saveRaw: true
+    });
+    const forced = await generateReflectPreview(rootDir, {
+      notes: "notes/today.md",
+      saveRaw: true,
+      force: true
+    });
+
+    expect(first.preview.rawNotePath).toBe(".aiwiki/sources/raw-notes/today.md");
+    expect(second.preview.rawNotePath).toBe(".aiwiki/sources/raw-notes/today-2.md");
+    expect(forced.preview.rawNotePath).toBe(".aiwiki/sources/raw-notes/today.md");
+    expect(await readFile(path.join(rootDir, forced.preview.rawNotePath!), "utf8")).toContain(
+      "Second."
+    );
+  });
+
+  it("prevents raw-note writes in read-only reflection", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(rootDir, "notes/today.md", "# Note\n\nKeep this.\n");
+
+    await expect(
+      generateReflectPreview(rootDir, {
+        notes: "notes/today.md",
+        saveRaw: true,
+        readOnly: true
+      })
+    ).rejects.toThrow("Cannot use --read-only with --save-raw");
   });
 
   it("reads git diff and detects changed high-risk files", async () => {
@@ -200,6 +268,10 @@ describe("generateReflectPreview", () => {
         "export function claimTask() {",
         "  return 'Claims are coordination hints, not locks. Use --force when blockers remain.';",
         "}",
+        "",
+        "export function resumeTask() {",
+        "  return '下一步做什么 / Next Action with Suggested test command for checkpoint handoff.';",
+        "}",
         ""
       ].join("\n")
     );
@@ -222,6 +294,7 @@ describe("generateReflectPreview", () => {
     expect(result.markdown).toContain("Task: `task ready` exposes open work");
     expect(result.markdown).toContain("Task claims are coordination hints, not locks");
     expect(result.markdown).toContain("Blocked task claims require explicit force");
+    expect(result.markdown).toContain("Task checkpoints feed resume handoffs");
     expect(result.markdown).toContain("Prime: `aiwiki prime` is the Codex startup dashboard");
     expect(result.markdown).toContain("Schema: `aiwiki schema` is the agent-facing contract surface");
     expect(result.preview.updatePlanDraft?.entries).toEqual(
@@ -240,12 +313,61 @@ describe("generateReflectPreview", () => {
           title: "Blocked task claims require explicit force"
         }),
         expect.objectContaining({
+          type: "pattern",
+          title: "Task checkpoints feed resume handoffs"
+        }),
+        expect.objectContaining({
           type: "module",
           title: "Prime"
         }),
         expect.objectContaining({
           type: "module",
           title: "Schema"
+        })
+      ])
+    );
+  });
+
+  it("extracts optional Beads and raw-note ingest lessons from git diff", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/beads.ts", "export const beads = 'baseline';\n");
+    await writeProjectFile(rootDir, "src/ingest.ts", "export const ingest = 'baseline';\n");
+    await writeProjectFile(rootDir, "src/raw-notes.ts", "export const notes = 'baseline';\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+
+    await writeProjectFile(
+      rootDir,
+      "src/beads.ts",
+      "export function readBeadsContext() { return '.beads bd ready bd status beads_ready_work'; }\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      "src/ingest.ts",
+      "export const ingest = 'compatibility path; prefer reflect --notes --save-raw';\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      "src/raw-notes.ts",
+      "export function saveRawNote() { return 'raw-notes'; }\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "module",
+          title: "Beads",
+          summary: expect.stringContaining("without writing to Beads")
+        }),
+        expect.objectContaining({
+          type: "module",
+          title: "Ingest",
+          summary: expect.stringContaining("reflect --notes --save-raw")
         })
       ])
     );
@@ -373,7 +495,7 @@ describe("generateReflectPreview", () => {
     );
   });
 
-  it("suggests freshness refreshes for wiki pages referencing changed files", async () => {
+  it("reports freshness refreshes without generating low-signal wiki writes", async () => {
     const rootDir = await tempProject();
     await writeProjectFile(rootDir, "src/brief.ts", "export const value = 1;\n");
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -398,15 +520,8 @@ describe("generateReflectPreview", () => {
 
     expect(result.preview.selectedDocs).toContain("wiki/modules/brief.md");
     expect(result.markdown).toContain("Refresh Brief");
-    expect(result.preview.updatePlanDraft?.entries).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "module",
-          title: "Brief",
-          source: "reflect"
-        })
-      ])
-    );
+    expect(result.markdown).toContain("No update plan draft was generated.");
+    expect(result.preview.updatePlanDraft).toBeUndefined();
   });
 
   it("scopes module draft files to the inferred changed module", async () => {
@@ -423,9 +538,15 @@ describe("generateReflectPreview", () => {
     await writeProjectFile(rootDir, "src/brief.ts", "export const brief = 2;\n");
     await writeProjectFile(rootDir, "src/config.ts", "export const config = 2;\n");
     await writeProjectFile(rootDir, "tests/brief.test.ts", "export const briefTest = 2;\n");
+    await writeProjectFile(
+      rootDir,
+      "notes/today.md",
+      "# Module lesson\n\nBrief and config updates are reusable module memory.\n"
+    );
 
     const result = await generateReflectPreview(rootDir, {
-      fromGitDiff: true
+      fromGitDiff: true,
+      notes: "notes/today.md"
     });
 
     const entries = result.preview.updatePlanDraft?.entries ?? [];
@@ -440,6 +561,24 @@ describe("generateReflectPreview", () => {
     expect(briefEntry?.files).not.toContain("README.md");
     expect(briefEntry?.files).not.toContain("src/config.ts");
     expect(configEntry?.files).toEqual(["src/config.ts"]);
+  });
+
+  it("does not create generic module drafts for plain changed files", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/words.ts", "export const words = 1;\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+    await writeProjectFile(rootDir, "src/words.ts", "export const words = 2;\n");
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.preview.changedFiles).toEqual(["src/words.ts"]);
+    expect(result.preview.updatePlanDraft).toBeUndefined();
+    expect(result.markdown).toContain("No update plan draft was generated.");
+    expect(result.markdown).not.toContain("Review module summary for words.");
   });
 
   it("writes an output plan draft without overwriting unless force is set", async () => {
@@ -481,6 +620,40 @@ describe("generateReflectPreview", () => {
       outputPlan: ".aiwiki/context-packs/reflect-plan.json",
       force: true
     });
+  });
+
+  it("excludes the output plan file from git reflection input", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(rootDir, "src/task.ts", "export const task = 1;\n");
+    await initGitProject(rootDir);
+    await writeProjectFile(
+      rootDir,
+      "src/task.ts",
+      "export const resume = '下一步做什么 / Next Action checkpoint handoff';\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      ".aiwiki/context-packs/reflect-plan.json",
+      "{\"version\":\"old\"}\n"
+    );
+    await writeProjectFile(rootDir, ".aiwiki/evals/local.jsonl", "{}\n");
+    await writeProjectFile(rootDir, ".venv/cache.py", "print('cache')\n");
+    await writeProjectFile(rootDir, "node_modules/demo/index.js", "module.exports = true;\n");
+    await writeProjectFile(rootDir, "package-lock.json", "{\"lockfileVersion\":3}\n");
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      outputPlan: ".aiwiki/context-packs/reflect-plan.json",
+      force: true
+    });
+
+    expect(result.preview.changedFiles).toContain("src/task.ts");
+    expect(result.preview.changedFiles).not.toContain(".aiwiki/context-packs/reflect-plan.json");
+    expect(result.preview.changedFiles.some((file) => file.startsWith(".aiwiki/"))).toBe(false);
+    expect(result.preview.changedFiles.some((file) => file.startsWith(".venv/"))).toBe(false);
+    expect(result.preview.changedFiles.some((file) => file.startsWith("node_modules/"))).toBe(false);
+    expect(result.preview.changedFiles).not.toContain("package-lock.json");
   });
 
   it("appends reflect eval cases for each preview generation", async () => {

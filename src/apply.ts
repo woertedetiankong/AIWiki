@@ -94,6 +94,7 @@ export interface WikiUpdateOperation {
   action: WikiUpdateAction;
   source?: WikiUpdateSource;
   reason: string;
+  summaryPreview?: string;
   frontmatterPreview?: Record<string, unknown>;
   bodyPreview?: string;
   appendPreview?: Array<{
@@ -385,6 +386,7 @@ function operationForEntry(
       action: "create",
       source: entry.source,
       reason: "Target wiki page does not exist.",
+      summaryPreview: entry.summary,
       frontmatterPreview: createFrontmatterPreview(entry),
       bodyPreview: previewText(templateBody(entry))
     };
@@ -398,6 +400,7 @@ function operationForEntry(
       action: "append",
       source: entry.source,
       reason: "Target wiki page exists and explicit append sections were provided.",
+      summaryPreview: entry.summary ?? entry.append.at(0)?.body,
       appendPreview: appendPreview(entry)
     };
   }
@@ -408,6 +411,7 @@ function operationForEntry(
     path: relativePath,
     action: "skip",
     source: entry.source,
+    summaryPreview: entry.summary,
     reason: "Target wiki page already exists and no explicit append sections were provided."
   };
 }
@@ -493,6 +497,71 @@ function formatOperation(operation: WikiUpdateOperation): string {
   return lines.join("\n");
 }
 
+function operationCount(
+  operations: WikiUpdateOperation[],
+  action: WikiUpdateAction
+): number {
+  return operations.filter((operation) => operation.action === action).length;
+}
+
+function plainTypeLabel(type: WikiUpdatePageType): string {
+  if (type === "rule") {
+    return "Rule to remember";
+  }
+
+  if (type === "pattern") {
+    return "Reusable workflow pattern";
+  }
+
+  if (type === "module") {
+    return "Module note";
+  }
+
+  if (type === "pitfall") {
+    return "Pitfall to avoid";
+  }
+
+  return "Project decision";
+}
+
+function actionPhrase(action: WikiUpdateAction): string {
+  if (action === "create") {
+    return "Will create";
+  }
+
+  if (action === "append") {
+    return "Will append to";
+  }
+
+  return "Will skip";
+}
+
+function formatPlainMemoryProposal(operation: WikiUpdateOperation): string {
+  const summary = operation.summaryPreview?.trim()
+    || "No short explanation was provided; review the detailed operation before confirming.";
+
+  return [
+    `- ${plainTypeLabel(operation.type)}: ${operation.title}`,
+    `  - Plain meaning: ${summary}`,
+    `  - ${actionPhrase(operation.action)}: ${operation.path}`
+  ].join("\n");
+}
+
+function confirmationGuidance(applied: boolean): string[] {
+  if (applied) {
+    return [
+      "This plan has been confirmed and applied.",
+      "AIWiki updated the listed wiki pages, then refreshed index and graph data when writes occurred."
+    ];
+  }
+
+  return [
+    "This plan is a reviewable set of candidate AIWiki memory changes.",
+    "The preview below shows exactly which wiki pages would be created, appended, or skipped.",
+    "Nothing has been written yet; run the same apply command with `--confirm` only after reviewing the operations."
+  ];
+}
+
 export function formatWikiUpdateApplyMarkdown(
   result: Pick<
     WikiUpdateApplyResult,
@@ -506,6 +575,9 @@ export function formatWikiUpdateApplyMarkdown(
   >
 ): string {
   const title = result.applied ? "# Wiki Update Applied" : "# Wiki Update Preview";
+  const plannedCreates = operationCount(result.preview.operations, "create");
+  const plannedAppends = operationCount(result.preview.operations, "append");
+  const plannedSkips = operationCount(result.preview.operations, "skip");
   const lines = [
     title,
     "",
@@ -513,12 +585,30 @@ export function formatWikiUpdateApplyMarkdown(
     result.preview.planTitle ? `Plan: ${result.preview.planTitle}` : undefined,
     `Applied: ${result.applied ? "yes" : "no"}`,
     "",
+    "## What This Plan Is",
+    ...confirmationGuidance(result.applied).map((item) => `- ${item}`),
+    "",
+    "## Planned Changes",
+    `- Create wiki pages: ${plannedCreates}`,
+    `- Append existing pages: ${plannedAppends}`,
+    `- Skip existing pages: ${plannedSkips}`,
+    "",
+    "## Memory To Save",
+    result.preview.operations.length > 0
+      ? result.preview.operations.map(formatPlainMemoryProposal).join("\n")
+      : "- No candidate memory changes.",
+    "",
+    "## Confirm Only If",
+    "- Each plain-language memory item above is durable project knowledge, not a one-off session note.",
+    "- The listed target paths are the wiki pages you expect AIWiki to maintain.",
+    "- Proposed rules are acceptable as proposed memory and can be promoted or edited later.",
+    "",
     "## Operations",
     result.preview.operations.length > 0
       ? result.preview.operations.map(formatOperation).join("\n")
       : "- No operations.",
     "",
-    "## Summary",
+    "## Applied Results",
     `- Created: ${result.created.length}`,
     `- Appended: ${result.appended.length}`,
     `- Skipped: ${result.skipped.length}`,
