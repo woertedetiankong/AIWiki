@@ -14,13 +14,48 @@ import { ACTIVE_TASK_PATH, TASKS_DIR } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
 import { appendLogEntry } from "./log.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
-import type { RiskLevel, TaskCheckpoint, TaskMetadata, TaskStatus } from "./types.js";
+import type {
+  RiskLevel,
+  TaskCheckpoint,
+  TaskDependency,
+  TaskDependencyType,
+  TaskMetadata,
+  TaskStatus,
+  TaskType
+} from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface TaskStartOptions {
   id?: string;
   prd?: string;
+  type?: TaskType;
+  priority?: number;
+  assignee?: string;
+}
+
+export interface TaskCreateOptions {
+  id?: string;
+  prd?: string;
+  type?: TaskType;
+  priority?: number;
+}
+
+export interface TaskDiscoverOptions extends TaskCreateOptions {
+  from?: string;
+}
+
+export interface TaskDependencyOptions {
+  type?: TaskDependencyType;
+}
+
+export interface TaskClaimOptions {
+  actor?: string;
+  force?: boolean;
+}
+
+export interface TaskReadyOptions {
+  limit?: number;
 }
 
 export interface TaskCheckpointOptions {
@@ -75,9 +110,24 @@ export interface TaskListData {
   tasks: TaskMetadata[];
 }
 
+export interface TaskReadyItem {
+  metadata: TaskMetadata;
+  blockedBy: string[];
+}
+
+export interface TaskReadyData {
+  activeTaskId?: string;
+  tasks: TaskReadyItem[];
+}
+
 export interface TaskResumeData extends TaskStatusData {
   resume: string;
   outputPath?: string;
+}
+
+export interface TaskDependencyData {
+  task: TaskMetadata;
+  dependency: TaskDependency;
 }
 
 const TASK_FILES = [
@@ -94,12 +144,51 @@ const TASK_FILES = [
   "metadata.json"
 ] as const;
 
+const CLOSED_STATUSES: TaskStatus[] = ["done", "cancelled"];
+const READY_STATUSES: TaskStatus[] = ["open"];
+const BLOCKING_DEPENDENCY_TYPES: TaskDependencyType[] = ["blocks", "parent_child"];
+
 function slug(value: string): string {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")
     .replace(/^-|-$/gu, "")
     .slice(0, 48);
+}
+
+function validatePriority(priority: number | undefined): number | undefined {
+  if (priority === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(priority) || priority < 0 || priority > 4) {
+    throw new Error(`Task priority must be an integer from 0 to 4, received: ${priority}`);
+  }
+
+  return priority;
+}
+
+function defaultActor(): string {
+  return process.env.AIWIKI_ACTOR ?? process.env.USER ?? process.env.USERNAME ?? "codex";
+}
+
+function taskTypeLabel(type: TaskType | undefined): string {
+  return type ?? "task";
+}
+
+function priorityLabel(priority: number | undefined): string {
+  return priority === undefined ? "P2" : `P${priority}`;
+}
+
+function normalizedDependencies(metadata: TaskMetadata): TaskDependency[] {
+  return metadata.dependencies ?? [];
+}
+
+function isClosedStatus(status: TaskStatus): boolean {
+  return CLOSED_STATUSES.includes(status);
+}
+
+function dependencyBlocksReady(dependency: TaskDependency): boolean {
+  return BLOCKING_DEPENDENCY_TYPES.includes(dependency.type);
 }
 
 function today(): string {
@@ -167,13 +256,116 @@ async function activeTaskId(rootDir: string): Promise<string | undefined> {
   return value.length > 0 ? value : undefined;
 }
 
+async function loadAllTaskMetadata(rootDir: string): Promise<TaskMetadata[]> {
+  const tasksRoot = resolveProjectPath(rootDir, TASKS_DIR);
+  let entries: string[] = [];
+  try {
+    entries = await readdir(tasksRoot);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const tasks: TaskMetadata[] = [];
+  for (const entry of entries) {
+    const metadataPath = taskFile(rootDir, entry, "metadata.json");
+    if (await pathExists(metadataPath)) {
+      tasks.push(await readMetadata(rootDir, entry));
+    }
+  }
+
+  return tasks;
+}
+
+function shortTaskId(taskId: string): string {
+  return taskId.replace(/^\d{4}-\d{2}-\d{2}-/u, "");
+}
+
+function resolveTaskReferenceFromMetadata(
+  tasks: TaskMetadata[],
+  reference: string,
+  label = "Task"
+): string {
+  const exact = tasks.find((task) => task.id === reference);
+  if (exact) {
+    return exact.id;
+  }
+
+  const matches = tasks.filter((task) => {
+    return shortTaskId(task.id) === reference ||
+      task.id.endsWith(`-${reference}`);
+  });
+
+  if (matches.length === 0) {
+    throw new Error(`${label} not found: ${reference}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `${label} reference is ambiguous: ${reference} matches ${matches.map((task) => task.id).join(", ")}`
+    );
+  }
+
+  return matches[0].id;
+}
+
 async function resolveTaskId(rootDir: string, taskId?: string): Promise<string> {
   const id = taskId ?? (await activeTaskId(rootDir));
   if (!id) {
     throw new Error("No active AIWiki task. Run `aiwiki task start \"...\"` first.");
   }
 
-  return id;
+  return taskId
+    ? resolveTaskReferenceFromMetadata(await loadAllTaskMetadata(rootDir), id)
+    : id;
+}
+
+function taskById(tasks: TaskMetadata[]): Map<string, TaskMetadata> {
+  return new Map(tasks.map((task) => [task.id, task]));
+}
+
+function blockingDependencyIds(task: TaskMetadata, tasksById: Map<string, TaskMetadata>): string[] {
+  return normalizedDependencies(task)
+    .filter(dependencyBlocksReady)
+    .filter((dependency) => {
+      const dependencyTask = tasksById.get(dependency.id);
+      return !dependencyTask || !isClosedStatus(dependencyTask.status);
+    })
+    .map((dependency) => dependency.id)
+    .sort();
+}
+
+function assertNoDependencyCycle(
+  tasksById: Map<string, TaskMetadata>,
+  childId: string,
+  parentId: string
+): void {
+  if (childId === parentId) {
+    throw new Error(`Task cannot depend on itself: ${childId}`);
+  }
+
+  const visit = (currentId: string, seen: Set<string>): boolean => {
+    if (currentId === childId) {
+      return true;
+    }
+    if (seen.has(currentId)) {
+      return false;
+    }
+
+    seen.add(currentId);
+    const current = tasksById.get(currentId);
+    if (!current) {
+      return false;
+    }
+
+    return normalizedDependencies(current)
+      .filter(dependencyBlocksReady)
+      .some((dependency) => visit(dependency.id, seen));
+  };
+
+  if (visit(parentId, new Set<string>())) {
+    throw new Error(`Adding dependency ${childId} -> ${parentId} would create a cycle.`);
+  }
 }
 
 async function gitChangedFiles(rootDir: string): Promise<string[]> {
@@ -202,10 +394,23 @@ function bulletList(items: string[], fallback: string): string {
 }
 
 function taskMd(metadata: TaskMetadata): string {
+  const dependencies = normalizedDependencies(metadata);
   return `# Task: ${metadata.title}
 
 ## Task ID
 ${metadata.id}
+
+## Workflow
+- Status: ${metadata.status}
+- Type: ${taskTypeLabel(metadata.type)}
+- Priority: ${priorityLabel(metadata.priority)}
+- Assignee: ${metadata.assignee ?? "unclaimed"}
+
+## Dependencies
+${bulletList(
+  dependencies.map((dependency) => `${dependency.id} (${dependency.type})`),
+  "No dependencies recorded."
+)}
 
 ## Original Request
 ${metadata.title}
@@ -264,6 +469,39 @@ function checkpointLine(checkpoint: TaskCheckpoint): string {
     ].filter(Boolean).join(" | ");
   }
 
+  if (checkpoint.type === "task_claimed") {
+    return [
+      "Task claimed.",
+      checkpoint.actor ? `Actor: ${checkpoint.actor}` : undefined
+    ].filter(Boolean).join(" | ");
+  }
+
+  if (checkpoint.type === "dependency_added") {
+    return [
+      "Dependency added.",
+      checkpoint.dependency_id ? `Dependency: ${checkpoint.dependency_id}` : undefined,
+      checkpoint.dependency_type ? `Type: ${checkpoint.dependency_type}` : undefined
+    ].filter(Boolean).join(" | ");
+  }
+
+  if (checkpoint.type === "task_discovered") {
+    return [
+      checkpoint.message ? `Discovered: ${checkpoint.message}` : "Task discovered.",
+      checkpoint.from ? `From: ${checkpoint.from}` : undefined
+    ].filter(Boolean).join(" | ");
+  }
+
+  if (checkpoint.type === "task_created") {
+    return checkpoint.message ? `Task created: ${checkpoint.message}` : "Task created.";
+  }
+
+  if (checkpoint.type === "task_closed") {
+    return [
+      "Task closed.",
+      checkpoint.status ? `Status: ${checkpoint.status}` : undefined
+    ].filter(Boolean).join(" | ");
+  }
+
   const parts = [
     checkpoint.message,
     checkpoint.step ? `Step: ${checkpoint.step}` : undefined,
@@ -289,7 +527,12 @@ function validateCheckpointEvent(value: unknown, taskId: string, lineNumber: num
   if (
     event.type !== "checkpoint" &&
     event.type !== "decision" &&
-    event.type !== "blocker"
+    event.type !== "blocker" &&
+    event.type !== "task_created" &&
+    event.type !== "task_claimed" &&
+    event.type !== "dependency_added" &&
+    event.type !== "task_discovered" &&
+    event.type !== "task_closed"
   ) {
     throw new Error(
       `Corrupt task event log for ${taskId}: line ${lineNumber} has unsupported event type.`
@@ -537,30 +780,48 @@ function checkpointsMarkdown(checkpoints: TaskCheckpoint[]): string {
 }
 
 function statusMarkdown(status: TaskStatusData): string {
+  const dependencies = normalizedDependencies(status.metadata);
+  const completed = excerptList(status.progress, "Completed");
+  const inProgress = excerptList(status.progress, "In Progress");
+  const next = excerptList(status.progress, "Next Recommended Steps");
+  const changed = bulletItems(status.changedFiles);
+  const tests = bulletItems(status.tests);
+  const decisions = bulletItems(status.decisions);
+  const blockers = bulletItems(status.blockers);
   return `# Task Status
 
 ## Active Task
-${status.metadata.title}
+- ${status.metadata.title}
+- Task ID: ${status.metadata.id}
+- Status: ${status.metadata.status}
 
-## Task ID
-${status.metadata.id}
+## Workflow
+- Type: ${taskTypeLabel(status.metadata.type)}
+- Priority: ${priorityLabel(status.metadata.priority)}
+- Assignee: ${status.metadata.assignee ?? "unclaimed"}
+- Dependencies: ${dependencies.length > 0 ? dependencies.map((dependency) => `${dependency.id} (${dependency.type})`).join(", ") : "none"}
 
-## Status
-${status.metadata.status}
+## Progress
+- Last completed: ${completed.at(-1) ?? "No completed work recorded."}
+- In progress: ${inProgress[0] ?? "No in-progress work recorded."}
 
-${status.progress.trim()}
+## Next Steps
+${bulletList(limitItems(next, 5), "No next steps recorded.")}
+
+## Changed Files
+${bulletList(limitItems(changed, 12), "No changed files recorded.")}
+
+## Tests
+${bulletList(limitItems(tests, 6), "No tests recorded.")}
 
 ## Decisions
-${status.decisions.trim() || "- None recorded."}
+${bulletList(limitItems(decisions, 5), "None recorded.")}
 
-${status.changedFiles.trim()}
-
-${status.tests.trim()}
+## Blockers
+${bulletList(limitItems(blockers, 5), "None recorded.")}
 
 ## Checkpoints
-${checkpointsMarkdown(status.checkpoints)}
-
-${status.blockers.trim()}
+${checkpointsMarkdown(status.checkpoints.slice(-8))}
 `;
 }
 
@@ -569,11 +830,11 @@ function listMarkdown(data: TaskListData): string {
   return `# AIWiki Tasks
 
 ## Active
-${active ? `- ${active.id} | ${active.title} | ${active.status}` : "- None"}
+${active ? `- ${active.id} | ${active.title} | ${active.status} | ${priorityLabel(active.priority)}` : "- None"}
 
 ## Recent
 ${bulletList(
-  data.tasks.map((task) => `${task.id} | ${task.title} | ${task.status}`),
+  data.tasks.map((task) => `${task.id} | ${task.title} | ${task.status} | ${priorityLabel(task.priority)} | ${taskTypeLabel(task.type)}`),
   "No tasks found."
 )}
 `;
@@ -592,6 +853,29 @@ async function syncTaskDerivedFiles(rootDir: string, taskId: string): Promise<Ta
   await writeFile(taskFile(rootDir, taskId, "tests.md"), status.tests, "utf8");
   await writeFile(taskFile(rootDir, taskId, "resume.md"), resumeMarkdown(status), "utf8");
   return status;
+}
+
+async function writeInitialTaskFiles(rootDir: string, metadata: TaskMetadata): Promise<void> {
+  const dir = taskDir(rootDir, metadata.id);
+  await mkdir(dir, { recursive: true });
+  await writeMetadata(rootDir, metadata);
+  await writeFile(taskFile(rootDir, metadata.id, "task.md"), taskMd(metadata), "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "brief.md"), "# Brief\n\n- Not recorded.\n", "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "plan.md"), "# Plan\n\n- Not recorded.\n", "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "progress.md"), initialProgressMd(), "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "decisions.md"), emptySection("Decisions"), "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "blockers.md"), emptySection("Blockers"), "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "changed-files.md"), emptySection("Changed Files"), "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "tests.md"), emptySection("Tests"), "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "checkpoints.jsonl"), "", "utf8");
+  await writeFile(taskFile(rootDir, metadata.id, "resume.md"), "", "utf8");
+  if (metadata.prd) {
+    await writeFile(
+      taskFile(rootDir, metadata.id, "prd-progress.md"),
+      "# PRD Implementation Progress\n\n- Not generated in no-LLM mode.\n",
+      "utf8"
+    );
+  }
 }
 
 async function appendTaskEvent(
@@ -627,32 +911,30 @@ export async function startTask(
     id,
     title,
     status: "in_progress",
+    type: options.type ?? "task",
+    priority: validatePriority(options.priority),
+    assignee: options.assignee ?? defaultActor(),
+    claimed_at: timestamp,
     created_at: timestamp,
     updated_at: timestamp,
     prd: options.prd
   };
 
-  await mkdir(dir, { recursive: true });
-  await writeMetadata(rootDir, metadata);
-  await writeFile(taskFile(rootDir, id, "task.md"), taskMd(metadata), "utf8");
-  await writeFile(taskFile(rootDir, id, "brief.md"), "# Brief\n\n- Not recorded.\n", "utf8");
-  await writeFile(taskFile(rootDir, id, "plan.md"), "# Plan\n\n- Not recorded.\n", "utf8");
-  await writeFile(taskFile(rootDir, id, "progress.md"), initialProgressMd(), "utf8");
-  await writeFile(taskFile(rootDir, id, "decisions.md"), emptySection("Decisions"), "utf8");
-  await writeFile(taskFile(rootDir, id, "blockers.md"), emptySection("Blockers"), "utf8");
-  await writeFile(taskFile(rootDir, id, "changed-files.md"), emptySection("Changed Files"), "utf8");
-  await writeFile(taskFile(rootDir, id, "tests.md"), emptySection("Tests"), "utf8");
-  await writeFile(taskFile(rootDir, id, "checkpoints.jsonl"), "", "utf8");
-  await writeFile(taskFile(rootDir, id, "resume.md"), "", "utf8");
-  if (options.prd) {
-    await writeFile(
-      taskFile(rootDir, id, "prd-progress.md"),
-      "# PRD Implementation Progress\n\n- Not generated in no-LLM mode.\n",
-      "utf8"
-    );
-  }
+  await writeInitialTaskFiles(rootDir, metadata);
   await mkdir(resolveProjectPath(rootDir, TASKS_DIR), { recursive: true });
   await writeFile(resolveProjectPath(rootDir, ACTIVE_TASK_PATH), id, "utf8");
+  await appendTaskEvent(rootDir, id, {
+    time: timestamp,
+    type: "task_created",
+    message: title,
+    task_id: id
+  });
+  await appendTaskEvent(rootDir, id, {
+    time: timestamp,
+    type: "task_claimed",
+    actor: metadata.assignee,
+    task_id: id
+  });
   await appendLogEntry(rootDir, {
     action: "task start",
     title,
@@ -661,7 +943,7 @@ export async function startTask(
 
   return {
     data: metadata,
-    markdown: `# Task Started\n\n- Task ID: ${id}\n- Title: ${title}\n- Status: in_progress\n`,
+    markdown: `# Task Started\n\n- Task ID: ${id}\n- Title: ${title}\n- Status: in_progress\n- Assignee: ${metadata.assignee}\n`,
     json: toJson(metadata)
   };
 }
@@ -671,23 +953,7 @@ export async function listTasks(
   options: TaskListOptions = {}
 ): Promise<TaskCommandResult<TaskListData>> {
   await loadAIWikiConfig(rootDir);
-  const tasksRoot = resolveProjectPath(rootDir, TASKS_DIR);
-  let entries: string[] = [];
-  try {
-    entries = await readdir(tasksRoot);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  const tasks: TaskMetadata[] = [];
-  for (const entry of entries) {
-    const metadataPath = taskFile(rootDir, entry, "metadata.json");
-    if (await pathExists(metadataPath)) {
-      tasks.push(await readMetadata(rootDir, entry));
-    }
-  }
+  const tasks = await loadAllTaskMetadata(rootDir);
 
   const filtered = tasks
     .filter((task) => (options.status ? task.status === options.status : true))
@@ -695,6 +961,246 @@ export async function listTasks(
     .slice(0, options.recent);
   const data = { activeTaskId: await activeTaskId(rootDir), tasks: filtered };
   return { data, markdown: listMarkdown(data), json: toJson(data) };
+}
+
+export async function createTask(
+  rootDir: string,
+  title: string,
+  options: TaskCreateOptions = {}
+): Promise<TaskCommandResult<TaskMetadata>> {
+  await loadAIWikiConfig(rootDir);
+  const id = options.id ?? taskIdFor(title);
+  const dir = taskDir(rootDir, id);
+  if (await pathExists(dir)) {
+    throw new Error(`Task already exists: ${id}`);
+  }
+
+  const timestamp = now();
+  const metadata: TaskMetadata = {
+    id,
+    title,
+    status: "open",
+    type: options.type ?? "task",
+    priority: validatePriority(options.priority),
+    created_at: timestamp,
+    updated_at: timestamp,
+    prd: options.prd
+  };
+
+  await writeInitialTaskFiles(rootDir, metadata);
+  await appendTaskEvent(rootDir, id, {
+    time: timestamp,
+    type: "task_created",
+    message: title,
+    task_id: id
+  });
+  await appendLogEntry(rootDir, {
+    action: "task create",
+    title,
+    bullets: [`Task ID: ${id}`, "Status: open"]
+  });
+
+  return {
+    data: metadata,
+    markdown: `# Task Created\n\n- Task ID: ${id}\n- Title: ${title}\n- Status: open\n`,
+    json: toJson(metadata)
+  };
+}
+
+export async function discoverTask(
+  rootDir: string,
+  title: string,
+  options: TaskDiscoverOptions = {}
+): Promise<TaskCommandResult<TaskMetadata>> {
+  const from = options.from
+    ? await resolveTaskId(rootDir, options.from)
+    : await activeTaskId(rootDir);
+  const created = await createTask(rootDir, title, options);
+  const metadata = created.data;
+
+  if (from) {
+    const dependency: TaskDependency = {
+      id: from,
+      type: "discovered_from",
+      created_at: now()
+    };
+    metadata.dependencies = [dependency];
+    metadata.updated_at = dependency.created_at;
+    await writeMetadata(rootDir, metadata);
+    await writeFile(taskFile(rootDir, metadata.id, "task.md"), taskMd(metadata), "utf8");
+    await appendTaskEvent(rootDir, metadata.id, {
+      time: dependency.created_at,
+      type: "task_discovered",
+      message: title,
+      task_id: metadata.id,
+      from
+    });
+  }
+
+  return {
+    data: metadata,
+    markdown: `# Task Discovered\n\n- Task ID: ${metadata.id}\n- Title: ${title}\n- Status: open\n${from ? `- Discovered From: ${from}\n` : ""}`,
+    json: toJson(metadata)
+  };
+}
+
+export async function addTaskDependency(
+  rootDir: string,
+  taskId: string,
+  dependencyId: string,
+  options: TaskDependencyOptions = {}
+): Promise<TaskCommandResult<TaskDependencyData>> {
+  await loadAIWikiConfig(rootDir);
+  const tasks = await loadAllTaskMetadata(rootDir);
+  const tasksById = taskById(tasks);
+  const resolvedTaskId = resolveTaskReferenceFromMetadata(tasks, taskId);
+  const resolvedDependencyId = resolveTaskReferenceFromMetadata(
+    tasks,
+    dependencyId,
+    "Dependency task"
+  );
+  const task = tasksById.get(resolvedTaskId);
+  if (!task) {
+    throw new Error(`Task not found: ${taskId}`);
+  }
+
+  const type = options.type ?? "blocks";
+  if (dependencyBlocksReady({ id: resolvedDependencyId, type, created_at: now() })) {
+    assertNoDependencyCycle(tasksById, resolvedTaskId, resolvedDependencyId);
+  }
+
+  const dependencies = normalizedDependencies(task);
+  const existing = dependencies.find(
+    (dependency) => dependency.id === resolvedDependencyId && dependency.type === type
+  );
+  if (existing) {
+    return {
+      data: { task, dependency: existing },
+      markdown: `# Dependency Already Exists\n\n- Task ID: ${resolvedTaskId}\n- Dependency: ${resolvedDependencyId}\n- Type: ${type}\n`,
+      json: toJson({ task, dependency: existing })
+    };
+  }
+
+  const timestamp = now();
+  const dependency: TaskDependency = {
+    id: resolvedDependencyId,
+    type,
+    created_at: timestamp
+  };
+  task.dependencies = [...dependencies, dependency].sort((a, b) => a.id.localeCompare(b.id));
+  task.updated_at = timestamp;
+  await writeMetadata(rootDir, task);
+  await writeFile(taskFile(rootDir, task.id, "task.md"), taskMd(task), "utf8");
+  await appendTaskEvent(rootDir, task.id, {
+    time: timestamp,
+    type: "dependency_added",
+    task_id: task.id,
+    dependency_id: resolvedDependencyId,
+    dependency_type: type
+  });
+
+  return {
+    data: { task, dependency },
+    markdown: `# Dependency Added\n\n- Task ID: ${resolvedTaskId}\n- Dependency: ${resolvedDependencyId}\n- Type: ${type}\n`,
+    json: toJson({ task, dependency })
+  };
+}
+
+export async function claimTask(
+  rootDir: string,
+  taskId?: string,
+  options: TaskClaimOptions = {}
+): Promise<TaskCommandResult<TaskMetadata>> {
+  await loadAIWikiConfig(rootDir);
+  const id = await resolveTaskId(rootDir, taskId);
+  const metadata = await readMetadata(rootDir, id);
+  if (isClosedStatus(metadata.status)) {
+    throw new Error(`Cannot claim closed task: ${id}`);
+  }
+  if (!options.force) {
+    const blockers = blockingDependencyIds(metadata, taskById(await loadAllTaskMetadata(rootDir)));
+    if (blockers.length > 0) {
+      throw new Error(
+        `Task ${id} is blocked by unfinished dependencies: ${blockers.join(", ")}. Use --force to claim anyway.`
+      );
+    }
+  }
+
+  const timestamp = now();
+  metadata.status = "in_progress";
+  metadata.assignee = options.actor ?? defaultActor();
+  metadata.claimed_at = timestamp;
+  metadata.updated_at = timestamp;
+  await writeMetadata(rootDir, metadata);
+  await writeFile(taskFile(rootDir, id, "task.md"), taskMd(metadata), "utf8");
+  await mkdir(resolveProjectPath(rootDir, TASKS_DIR), { recursive: true });
+  await writeFile(resolveProjectPath(rootDir, ACTIVE_TASK_PATH), id, "utf8");
+  await appendTaskEvent(rootDir, id, {
+    time: timestamp,
+    type: "task_claimed",
+    actor: metadata.assignee,
+    task_id: id
+  });
+
+  return {
+    data: metadata,
+    markdown: `# Task Claimed\n\n- Task ID: ${id}\n- Status: in_progress\n- Assignee: ${metadata.assignee}\n`,
+    json: toJson(metadata)
+  };
+}
+
+function readyMarkdown(data: TaskReadyData): string {
+  return `# Ready AIWiki Tasks
+
+## Active
+${data.activeTaskId ? `- ${data.activeTaskId}` : "- None"}
+
+## Ready
+${bulletList(
+  data.tasks.map(({ metadata }) => {
+    const details = [
+      priorityLabel(metadata.priority),
+      taskTypeLabel(metadata.type),
+      metadata.assignee ? `assignee ${metadata.assignee}` : "unclaimed"
+    ];
+    return `${metadata.id} | ${metadata.title} | ${details.join(" | ")}`;
+  }),
+  "No open tasks are ready."
+)}
+`;
+}
+
+export async function readyTasks(
+  rootDir: string,
+  options: TaskReadyOptions = {}
+): Promise<TaskCommandResult<TaskReadyData>> {
+  await loadAIWikiConfig(rootDir);
+  const tasks = await loadAllTaskMetadata(rootDir);
+  const tasksById = taskById(tasks);
+  const ready = tasks
+    .filter((task) => READY_STATUSES.includes(task.status))
+    .map((metadata) => ({
+      metadata,
+      blockedBy: blockingDependencyIds(metadata, tasksById)
+    }))
+    .filter((item) => item.blockedBy.length === 0)
+    .sort((a, b) => {
+      const priorityA = a.metadata.priority ?? 2;
+      const priorityB = b.metadata.priority ?? 2;
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+
+      return a.metadata.updated_at.localeCompare(b.metadata.updated_at);
+    })
+    .slice(0, options.limit);
+  const data = { activeTaskId: await activeTaskId(rootDir), tasks: ready };
+
+  return {
+    data,
+    markdown: readyMarkdown(data),
+    json: toJson(data)
+  };
 }
 
 export async function getTaskStatus(
@@ -772,6 +1278,12 @@ export async function closeTask(
   metadata.updated_at = timestamp;
   metadata.closed_at = timestamp;
   await writeMetadata(rootDir, metadata);
+  await appendTaskEvent(rootDir, id, {
+    time: timestamp,
+    type: "task_closed",
+    task_id: id,
+    status: metadata.status
+  });
   await resumeTask(rootDir, id);
 
   if ((await activeTaskId(rootDir)) === id) {

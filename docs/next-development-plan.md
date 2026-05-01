@@ -2,6 +2,7 @@
 
 Status: Working plan based on local dogfood feedback.
 Date: 2026-04-29
+Last reviewed: 2026-05-01
 
 This document turns recent AI coding-agent feedback into an implementation
 roadmap. It is intentionally narrower than `SPEC-FUTURE.md`: the goal is to make
@@ -31,6 +32,7 @@ Keep the full command surface, but make the everyday path obvious.
 These should be treated as the primary workflow:
 
 ```bash
+aiwiki prime
 aiwiki brief "<task>"
 aiwiki guard <file>
 aiwiki checkpoint ...
@@ -41,6 +43,23 @@ aiwiki reflect --from-git-diff
 These commands should stay short, stable, and highly tested. Most AI coding
 sessions should not need to know about graph, module portability, rule
 promotion, or import/export commands.
+
+### Local Work Graph Commands
+
+The Beads-inspired work graph is now part of the everyday Codex loop, but it
+stays local and lightweight:
+
+```bash
+aiwiki task create "<task>" --priority 1
+aiwiki task ready
+aiwiki task claim <id>
+aiwiki task discover "<follow-up>"
+aiwiki task dep add <task> <dependency>
+```
+
+Claims are coordination hints, not locks. Blocking dependencies only affect
+`task ready`; non-blocking `related` and `discovered_from` links preserve context
+without turning AIWiki into a full external issue tracker.
 
 ### Memory Maintenance Commands
 
@@ -74,14 +93,12 @@ They are not useless, but they should not compete with `brief`, `guard`,
 
 ## Priority 1: Seed Real Project Memory
 
-Current `.aiwiki/` memory has a project map, but no durable module, pitfall,
-decision, pattern, or rule pages. That makes `brief` and `guard` safe but too
-generic.
+Status: completed first slice on 2026-04-30.
 
-Build a reviewed memory seed for this repository:
+The repository now has reviewed `.aiwiki/wiki` memory beyond the project map:
 
 - module pages for `brief`, `guard`, `search`, `reflect`, `apply`, `task`,
-  `architecture`, and `module-pack`;
+  `doctor`, `agent`, `architecture`, and `module-pack`;
 - pitfall pages for known false positives, weak ranking cases, empty-memory
   output, and command noise;
 - rule pages for local-first writes, preview-first memory updates, and keeping
@@ -89,13 +106,14 @@ Build a reviewed memory seed for this repository:
 - decision pages for why AIWiki stays Markdown-first and why advanced systems
   remain optional.
 
-Acceptance criteria:
+Follow-up acceptance criteria:
 
-- `aiwiki brief "improve Codex coding workflow"` returns real project memory,
-  not only generic architecture advice.
-- `aiwiki guard src/brief.ts` and `aiwiki guard src/search.ts` surface specific
-  risks and related tests.
-- `aiwiki lint` passes after the memory pages are added.
+- Keep `aiwiki brief "improve Codex coding workflow"` returning project-specific
+  memory instead of only generic architecture advice.
+- Use `aiwiki reflect --from-git-diff` to preview refresh candidates whenever
+  changed files make seeded pages stale.
+- Do not confirm long-term wiki updates until the candidate memory has been
+  reviewed.
 
 ## Priority 2: Improve Chinese and Unicode Retrieval
 
@@ -143,19 +161,23 @@ Acceptance criteria:
 The command list is broad. AI agents need one obvious default command that
 collects the right context without making them choose between many subcommands.
 
-Candidate command:
+Implemented commands:
 
 ```bash
+aiwiki prime
 aiwiki agent "<task>"
+aiwiki schema all --format json
 ```
 
-Possible behavior:
+Implemented behavior:
 
-- internally runs a compact `brief`;
+- `agent` internally runs a compact `brief`;
 - includes architecture guard signals when useful;
 - suggests the top files where `guard` should be run next;
 - prints the next 2-3 commands, not the entire command surface;
-- supports `--read-only` so context gathering can avoid runtime writes.
+- is read-only by design so context gathering can avoid runtime writes.
+- `prime` summarizes active work, ready work, memory health, and next commands.
+- `schema` exposes machine-readable task/event/prime contracts.
 
 Acceptance criteria:
 
@@ -165,20 +187,21 @@ Acceptance criteria:
 
 ## Priority 5: Make Guardrails More Specific
 
-`guard` is valuable when memory exists, but it should also help when memory is
-sparse.
+Status: first slice implemented.
 
-Planned work:
+`guard` now helps sparse-memory projects by suggesting nearby tests, reporting
+file signals, recommending file notes only for useful targets, and surfacing
+built-in semantic change risks.
 
-- detect nearby test files and suggest concrete test commands;
-- include related implementation files based on filename, imports, or project
-  map signals;
-- surface whether the target file is large or central;
-- recommend a file note path only when it is likely useful.
+Remaining planned work:
+
+- improve related-file detection beyond simple imports and matched memory;
+- tune semantic risk wording from real-project dogfood;
+- keep cold-start guard output short enough to paste into an agent prompt.
 
 Acceptance criteria:
 
-- `aiwiki guard src/brief.ts` suggests relevant tests such as
+- `aiwiki guard src/brief.ts` continues to suggest relevant tests such as
   `tests/brief.test.ts`.
 - Empty-memory guard output remains short and does not pretend to know more than
   it does.
@@ -201,23 +224,26 @@ Acceptance criteria:
 
 - The recommended dev command works with paths containing spaces.
 - Windows PowerShell examples are tested or clearly marked.
-- AI-facing docs emphasize the five daily commands first.
+- AI-facing docs emphasize the daily Codex loop first.
 
 ## Priority 7: Reflect-Driven Freshness
 
-`reflect --from-git-diff` should help keep memory current when code changes.
+Status: first slice implemented.
 
-Planned work:
+`reflect --from-git-diff` now includes untracked files from `git status`, maps
+changed files back to related wiki pages, suggests freshness refresh entries,
+and extracts concrete work-graph and semantic-risk lessons when local heuristics
+can infer them.
 
-- map changed files back to related wiki pages;
-- suggest refresh entries for pages whose `files` frontmatter references changed
-  code;
+Remaining planned work:
+
+- improve generated append text when a refresh candidate is too generic;
 - keep the result preview-first through `apply`;
 - avoid promoting one-off implementation details into rules.
 
 Acceptance criteria:
 
-- Changed files produce candidate memory refreshes when related pages exist.
+- Changed files continue to produce candidate memory refreshes when related pages exist.
 - No wiki page is rewritten without explicit review and confirmation.
 - `brief`, `guard`, and `lint` reuse the same staleness logic.
 
@@ -239,13 +265,11 @@ Markdown CLI dependable.
 
 ## Suggested Implementation Order
 
-1. Add reviewed `.aiwiki/wiki` seed memory for this repository.
-2. Fix Unicode and Chinese retrieval.
-3. Tune `architecture audit` findings and add line-level evidence.
-4. Improve `guard` test/file specificity.
-5. Add or prototype `aiwiki agent "<task>"`.
-6. Tighten README and dev command ergonomics.
-7. Extend `reflect --from-git-diff` freshness suggestions.
+1. Fix Unicode and Chinese retrieval.
+2. Tune `architecture audit` findings and add line-level evidence.
+3. Improve `reflect --from-git-diff` candidate specificity from dogfood.
+4. Continue improving `guard` related-file and semantic-risk precision.
+5. Tighten README and dev command ergonomics.
 
 ## Verification Checklist
 

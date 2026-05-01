@@ -50,6 +50,8 @@ export function formatSearchResponse(
     return `${JSON.stringify(
       {
         query: response.query,
+        source: response.source,
+        indexStatus: response.indexStatus,
         results: response.results.map(serializeSearchResult)
       },
       null,
@@ -58,13 +60,27 @@ export function formatSearchResponse(
   }
 
   if (response.results.length === 0) {
-    return `# AIWiki Search Results\n\nQuery: \`${response.query}\`\n\nNo matching wiki pages found.\n`;
+    const indexLines = formatSearchIndexStatusLines(response);
+    return [
+      "# AIWiki Search Results",
+      "",
+      `Query: \`${response.query}\``,
+      `Source: ${response.source ?? "markdown"}`,
+      ...indexLines,
+      "",
+      "No matching wiki pages found.",
+      "",
+      "Search scope: `.aiwiki/wiki` memory only; source files are not searched.",
+      "Next: try `aiwiki brief \"<task>\"`, `aiwiki guard <file>`, or run `aiwiki map --write` to seed project memory."
+    ].join("\n") + "\n";
   }
 
   const lines = [
     "# AIWiki Search Results",
     "",
     `Query: \`${response.query}\``,
+    `Source: ${response.source ?? "markdown"}`,
+    ...formatSearchIndexStatusLines(response),
     ""
   ];
 
@@ -89,4 +105,35 @@ export function formatSearchResponse(
   });
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function formatSearchIndexStatusLines(response: SearchResponse): string[] {
+  if (!response.indexStatus) {
+    return [];
+  }
+
+  const status = response.indexStatus;
+  const lines = [
+    `Index fresh: ${status.fresh ? "yes" : "no"}`,
+    `Index pages: ${status.pageCount}/${status.sourcePageCount}`
+  ];
+
+  if (response.source === "markdown") {
+    lines.push(
+      status.initialized
+        ? "Index usage: unavailable; scanned Markdown instead."
+        : "Index usage: unavailable before AIWiki is initialized; scanned Markdown instead."
+    );
+  }
+
+  if (!status.fresh) {
+    lines.push(
+      `Index drift: ${status.stalePageCount} stale, ${status.missingPageCount} missing, ${status.extraPageCount} extra`,
+      status.initialized
+        ? "Refresh with `aiwiki index build`."
+        : "Initialize with `aiwiki init --project-name <name>` and `aiwiki map --write` before building the index."
+    );
+  }
+
+  return lines;
 }

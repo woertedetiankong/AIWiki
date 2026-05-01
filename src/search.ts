@@ -1,4 +1,9 @@
 import type { WikiPage, WikiPageType } from "./types.js";
+import {
+  getHybridIndexStatus,
+  readIndexedWikiPages,
+  type HybridIndexStatus
+} from "./hybrid-index.js";
 import { scanWikiPages } from "./wiki-store.js";
 
 export type SearchMatchedField = "title" | "frontmatter" | "path" | "body";
@@ -14,11 +19,14 @@ export interface SearchResult {
 export interface SearchOptions {
   type?: WikiPageType;
   limit?: number;
+  useIndex?: boolean;
 }
 
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
+  source?: "markdown" | "sqlite";
+  indexStatus?: HybridIndexStatus;
 }
 
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -150,7 +158,14 @@ export async function searchWikiMemory(
     return { query, results: [] };
   }
 
-  const pages = (await scanWikiPages(rootDir)).filter((page) => {
+  const indexStatus = options.useIndex
+    ? await getHybridIndexStatus(rootDir)
+    : undefined;
+  const indexedPages = options.useIndex
+    ? await readIndexedWikiPages(rootDir)
+    : undefined;
+  const source = indexedPages ? "sqlite" : "markdown";
+  const pages = (indexedPages ?? (await scanWikiPages(rootDir))).filter((page) => {
     return options.type ? page.frontmatter.type === options.type : true;
   });
 
@@ -166,5 +181,5 @@ export async function searchWikiMemory(
     })
     .slice(0, limit);
 
-  return { query, results };
+  return { query, results, source, indexStatus };
 }

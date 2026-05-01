@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,6 +11,14 @@ async function tempProject(): Promise<string> {
 }
 
 async function setupWiki(rootDir: string): Promise<void> {
+  await mkdir(path.join(rootDir, ".aiwiki"), {
+    recursive: true
+  });
+  await writeFile(
+    path.join(rootDir, ".aiwiki", "config.json"),
+    `${JSON.stringify({ projectName: "demo" }, null, 2)}\n`,
+    "utf8"
+  );
   await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), {
     recursive: true
   });
@@ -88,10 +96,16 @@ describe("searchWikiMemory", () => {
   it("returns empty results for an empty wiki or no matches", async () => {
     const rootDir = await tempProject();
 
-    await expect(searchWikiMemory(rootDir, "missing")).resolves.toEqual({
+    const response = await searchWikiMemory(rootDir, "missing");
+
+    expect(response).toEqual({
       query: "missing",
-      results: []
+      results: [],
+      source: "markdown"
     });
+    expect(formatSearchResponse(response, "markdown")).toContain(
+      "Search scope: `.aiwiki/wiki` memory only"
+    );
   });
 
   it("formats markdown and json output", async () => {
@@ -110,6 +124,20 @@ describe("searchWikiMemory", () => {
 
     expect(json.query).toBe("stripe");
     expect(json.results[0]?.title).toBe("Stripe webhook raw body");
+  });
+
+  it("makes indexed-search fallback explicit when the SQLite index is missing", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+
+    const response = await searchWikiMemory(rootDir, "stripe", {
+      useIndex: true
+    });
+    const markdown = formatSearchResponse(response, "markdown");
+
+    expect(response.source).toBe("markdown");
+    expect(response.indexStatus?.fresh).toBe(false);
+    expect(markdown).toContain("Index usage: unavailable; scanned Markdown instead.");
   });
 
   it("matches Chinese titles, body text, and mixed Chinese/English queries", async () => {

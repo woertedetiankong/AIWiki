@@ -1,6 +1,6 @@
 # PRD: AIWiki
 
-Status: Current product direction as of 2026-04-29.
+Status: Current product direction as of 2026-05-01.
 
 AIWiki is a local-first project memory and context compiler for AI coding agents.
 It stores durable project knowledge in `.aiwiki/` and turns that knowledge into
@@ -121,6 +121,10 @@ until reviewed and applied.
 The current CLI includes:
 
 - `init`
+- `prime`
+- `schema`
+- `codex`
+- `agent`
 - `search`
 - `brief`
 - `guard`
@@ -138,7 +142,12 @@ The current CLI includes:
 - `module import`
 - `module brief`
 - `module lint`
+- `task create`
 - `task start`
+- `task ready`
+- `task claim`
+- `task discover`
+- `task dep add`
 - `task list`
 - `task status`
 - `task close`
@@ -146,6 +155,7 @@ The current CLI includes:
 - `resume`
 - `decision`
 - `blocker`
+- `eval large-repos`
 
 See `README.md` for command usage and `SPEC.md` for exact behavior.
 
@@ -174,7 +184,7 @@ See `README.md` for command usage and `SPEC.md` for exact behavior.
 Near-term:
 
 - Continue Codex usability tuning from real-project dogfood.
-- Extend freshness / staleness checks so `reflect --from-git-diff` can suggest memory refreshes.
+- Review and improve the specificity of `reflect --from-git-diff` memory refresh and semantic-risk candidates.
 - `aiwiki lint --fix` for low-risk index/backlink/format repair.
 - Graph hotspots and conflicts using the existing graph model.
 - Retrieval feedback and tuning for brief, guard, reflect, and module workflows.
@@ -199,7 +209,8 @@ workflow before adding optional adapters.
 
 ### 1. Reflect-Driven Freshness
 
-Goal: make changed code point back to wiki pages that may need refresh.
+Goal: keep changed code connected to wiki pages that may need refresh, while
+making the generated candidates concrete enough for review.
 
 Focus commands:
 
@@ -209,8 +220,10 @@ Focus commands:
 
 Acceptance criteria:
 
-- `reflect --from-git-diff` finds wiki pages related to changed files and suggests
-  updating them in the output plan draft.
+- `reflect --from-git-diff` keeps finding wiki pages related to changed files and
+  suggesting update plan entries for review.
+- Generated append text should explain the durable lesson or refresh reason, not
+  only list changed files.
 - Suggestions remain preview-first and do not rewrite wiki pages without review.
 - `lint`, `brief`, and `guard` continue to show advisory staleness warnings.
 - Staleness warnings are advisory and must not block the user's task.

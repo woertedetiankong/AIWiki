@@ -1,10 +1,15 @@
 import { execFile } from "node:child_process";
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { loadAIWikiConfig } from "./config.js";
+import {
+  AIWikiNotInitializedError,
+  createDefaultConfig,
+  loadAIWikiConfig
+} from "./config.js";
 import { REFLECT_EVALS_PATH, RISK_FILE_KEYWORDS } from "./constants.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { diffRiskLessonsFromChanges } from "./risk-rules.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
 import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
@@ -29,6 +34,7 @@ export interface ReflectSection {
 
 export interface ReflectPreview {
   projectName: string;
+  initialized: boolean;
   fromGitDiff: boolean;
   notesPath?: string;
   changedFiles: string[];
@@ -42,6 +48,17 @@ export interface ReflectResult {
   preview: ReflectPreview;
   markdown: string;
   json: string;
+}
+
+interface DiffLesson {
+  title: string;
+  summary: string;
+  type: WikiUpdatePlanEntry["type"];
+  modules: string[];
+  files: string[];
+  status?: WikiUpdatePlanEntry["status"];
+  severity?: WikiUpdatePlanEntry["severity"];
+  tags?: string[];
 }
 
 const DEFAULT_REFLECT_LIMIT = 8;
@@ -93,12 +110,39 @@ function normalizeChangedFile(filePath: string): string {
   return toPosixPath(filePath).replace(/^\.\//u, "");
 }
 
+function defaultProjectName(rootDir: string): string {
+  return path.basename(path.resolve(rootDir)) || "project";
+}
+
 function extractChangedFiles(diff: string): string[] {
   const files = diff
     .split("\n")
     .map((line) => {
       const match = /^diff --git a\/(.+) b\/(.+)$/u.exec(line);
       return match?.[2];
+    })
+    .filter((file): file is string => Boolean(file))
+    .map(normalizeChangedFile);
+
+  return unique(files).sort();
+}
+
+function extractStatusChangedFiles(status: string): string[] {
+  const files = status
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return undefined;
+      }
+
+      const renamed = /^R\s+(.+?)\s+->\s+(.+)$/u.exec(trimmed);
+      if (renamed) {
+        return renamed[2];
+      }
+
+      const match = /^(?:[ MADRCU?!]{2})\s+(.+)$/u.exec(line);
+      return match?.[1];
     })
     .filter((file): file is string => Boolean(file))
     .map(normalizeChangedFile);
@@ -117,6 +161,70 @@ async function readGitDiff(rootDir: string): Promise<string> {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Unable to read git diff in ${rootDir}: ${message}`);
   }
+}
+
+async function isGitRepository(rootDir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    });
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+async function readGitStatus(rootDir: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["status", "--short"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    });
+    return stdout;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to read git status in ${rootDir}: ${message}`);
+  }
+}
+
+async function walkChangedDirectory(rootDir: string, relativeDir: string): Promise<string[]> {
+  const directory = resolveProjectPath(rootDir, relativeDir);
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const relativePath = normalizeChangedFile(path.posix.join(relativeDir, entry.name));
+    if (entry.name === ".git" || entry.name === "node_modules") {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      files.push(...(await walkChangedDirectory(rootDir, relativePath)));
+    } else if (entry.isFile()) {
+      files.push(relativePath);
+    }
+  }
+
+  return files;
+}
+
+async function filterChangedFileList(rootDir: string, files: string[]): Promise<string[]> {
+  const filtered: string[] = [];
+  for (const file of files) {
+    try {
+      const fileStat = await stat(resolveProjectPath(rootDir, file));
+      if (fileStat.isFile()) {
+        filtered.push(file);
+      } else if (fileStat.isDirectory()) {
+        filtered.push(...(await walkChangedDirectory(rootDir, file)));
+      }
+    } catch {
+      // Keep deleted files from git status/diff so memory can still be refreshed.
+      filtered.push(file);
+    }
+  }
+
+  return filtered;
 }
 
 async function readNotes(rootDir: string, notesPath: string | undefined): Promise<string> {
@@ -301,6 +409,177 @@ function includesAny(value: string, words: string[]): boolean {
   return words.some((word) => normalizedValue.includes(word));
 }
 
+function addedLinesByFile(diff: string): Map<string, string[]> {
+  const linesByFile = new Map<string, string[]>();
+  let currentFile: string | undefined;
+
+  for (const line of diff.split("\n")) {
+    const fileMatch = /^diff --git a\/(.+) b\/(.+)$/u.exec(line);
+    if (fileMatch) {
+      currentFile = normalizeChangedFile(fileMatch[2]);
+      if (!linesByFile.has(currentFile)) {
+        linesByFile.set(currentFile, []);
+      }
+      continue;
+    }
+
+    if (currentFile && line.startsWith("+") && !line.startsWith("+++")) {
+      linesByFile.get(currentFile)?.push(line.slice(1));
+    }
+  }
+
+  return linesByFile;
+}
+
+function lessonFiles(changedFiles: string[], suffixes: string[]): string[] {
+  const matches = unique(
+    suffixes.flatMap((suffix) =>
+      changedFiles.filter((file) => file === suffix || file.endsWith(`/${suffix}`))
+    )
+  );
+
+  return matches.length > 0 ? matches : changedFiles.slice(0, 5);
+}
+
+function lessonTextForFiles(linesByFile: Map<string, string[]>, files: string[]): string {
+  return files
+    .flatMap((file) => linesByFile.get(file) ?? [])
+    .join("\n");
+}
+
+function lessonFrom(
+  lesson: Omit<DiffLesson, "files">,
+  changedFiles: string[],
+  suffixes: string[]
+): DiffLesson {
+  return {
+    ...lesson,
+    files: lessonFiles(changedFiles, suffixes)
+  };
+}
+
+function extractDiffLessons(diff: string, changedFiles: string[]): DiffLesson[] {
+  if (!diff.trim() || changedFiles.length === 0) {
+    return [];
+  }
+
+  const lessons: DiffLesson[] = [];
+  const seen = new Set<string>();
+  const linesByFile = addedLinesByFile(diff);
+  const allAddedText = [...linesByFile.values()].flat().join("\n");
+  const taskFiles = lessonFiles(changedFiles, [
+    "src/task.ts",
+    "src/types.ts",
+    "src/cli.ts",
+    "src/codex.ts",
+    "tests/task.test.ts",
+    "SPEC.md",
+    "README.md"
+  ]);
+  const taskText = lessonTextForFiles(linesByFile, taskFiles);
+  const primeFiles = lessonFiles(changedFiles, [
+    "src/prime.ts",
+    "src/cli.ts",
+    "tests/prime.test.ts",
+    "SPEC.md",
+    "README.md"
+  ]);
+  const primeText = lessonTextForFiles(linesByFile, primeFiles);
+  const schemaFiles = lessonFiles(changedFiles, [
+    "src/schema.ts",
+    "src/cli.ts",
+    "tests/schema.test.ts",
+    "SPEC.md",
+    "README.md"
+  ]);
+  const schemaText = lessonTextForFiles(linesByFile, schemaFiles);
+  const addLesson = (lesson: DiffLesson): void => {
+    const key = `${lesson.type}:${lesson.title}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      lessons.push(lesson);
+    }
+  };
+
+  if (includesAny(taskText, ["task ready", "readytasks", "unfinished blocking dependencies", "blocking dependency"])) {
+    addLesson(lessonFrom({
+      type: "module",
+      title: "Task",
+      modules: ["task"],
+      summary: "`task ready` exposes open work with no unfinished `blocks` dependencies; `related` and `discovered_from` links should not block readiness.",
+      tags: ["work-graph", "codex"]
+    }, changedFiles, taskFiles));
+  }
+
+  if (includesAny(taskText, ["coordination hints", "not locks", "claimed_at", "task_claimed"])) {
+    addLesson(lessonFrom({
+      type: "decision",
+      title: "Task claims are coordination hints, not locks",
+      modules: ["task"],
+      summary: "`task claim` records active ownership for agent coordination, but it should not be treated as an exclusive distributed lock.",
+      tags: ["work-graph", "coordination"]
+    }, changedFiles, taskFiles));
+  }
+
+  if (includesAny(taskText, ["--force"]) && includesAny(taskText, ["blocked", "blocking dependencies", "blockers"])) {
+    addLesson(lessonFrom({
+      type: "rule",
+      title: "Blocked task claims require explicit force",
+      status: "proposed",
+      severity: "high",
+      modules: ["task"],
+      summary: "Blocked tasks should reject normal claims; `task claim --force` is the explicit human-approved override.",
+      tags: ["work-graph", "safety"]
+    }, changedFiles, taskFiles));
+  }
+
+  if (includesAny(primeText, ["aiwiki prime", "generateprimecontext", "active task", "ready work", "memory health"])) {
+    addLesson(lessonFrom({
+      type: "module",
+      title: "Prime",
+      modules: ["prime"],
+      summary: "`aiwiki prime` is the Codex startup dashboard for active task, ready work, memory health, and next commands.",
+      tags: ["codex", "startup"]
+    }, changedFiles, primeFiles));
+  }
+
+  if (includesAny(schemaText, ["task-event", "agent-facing", "schema name", "aiwiki prime context"])) {
+    addLesson(lessonFrom({
+      type: "module",
+      title: "Schema",
+      modules: ["schema"],
+      summary: "`aiwiki schema` is the agent-facing contract surface for task, task-event, and prime JSON data.",
+      tags: ["contracts", "agents"]
+    }, changedFiles, schemaFiles));
+  }
+
+  if (includesAny(allAddedText, ["tostructuredclierror", "wantsjsonerror", "structured cli errors", "structured json"])) {
+    addLesson(lessonFrom({
+      type: "pattern",
+      title: "Structured JSON errors for agent output",
+      modules: ["errors", "cli"],
+      summary: "When a command is asked for JSON, failures should be emitted as structured JSON errors with actionable hints.",
+      tags: ["agents", "errors"]
+    }, changedFiles, ["src/errors.ts", "src/cli.ts", "tests/errors.test.ts"]));
+  }
+
+  if (includesAny(allAddedText, ["codex --team", "task ready", "blocked tasks require explicit", "task claim <id>"])) {
+    addLesson(lessonFrom({
+      type: "pattern",
+      title: "Codex team runbooks include work graph guidance",
+      modules: ["codex", "task"],
+      summary: "`codex --team` should point agents to `prime`, `task ready`, `task claim`, and blocked-task `--force` guidance.",
+      tags: ["codex", "work-graph"]
+    }, changedFiles, ["src/codex.ts", "tests/codex.test.ts", "README.md", "SPEC.md"]));
+  }
+
+  for (const riskLesson of diffRiskLessonsFromChanges(changedFiles, linesByFile)) {
+    addLesson(riskLesson);
+  }
+
+  return lessons;
+}
+
 function appendEntryForPage(
   page: WikiPage,
   noteSummary: string | undefined,
@@ -334,9 +613,25 @@ function buildReflectUpdatePlanDraft(
   results: SearchResult[],
   modules: string[],
   riskyFiles: string[],
-  refreshPages: WikiPage[]
+  refreshPages: WikiPage[],
+  diffLessons: DiffLesson[]
 ): WikiUpdatePlan | undefined {
   const entries: WikiUpdatePlanEntry[] = [];
+  for (const lesson of diffLessons.slice(0, 8)) {
+    entries.push({
+      type: lesson.type,
+      title: lesson.title,
+      slug: safeSlug(lesson.title, lesson.type),
+      source: "reflect",
+      status: lesson.status,
+      modules: lesson.modules,
+      files: lesson.files,
+      tags: lesson.tags,
+      severity: lesson.severity,
+      summary: lesson.summary
+    });
+  }
+
   for (const page of refreshPages.slice(0, 5)) {
     entries.push(appendEntryForPage(
       page,
@@ -607,10 +902,36 @@ export async function generateReflectPreview(
     throw new Error("Cannot use --read-only with --output-plan because --output-plan writes a file.");
   }
 
-  const config = await loadAIWikiConfig(rootDir);
+  let initialized = true;
+  let config;
+  try {
+    config = await loadAIWikiConfig(rootDir);
+  } catch (error) {
+    if (!(error instanceof AIWikiNotInitializedError)) {
+      throw error;
+    }
+
+    initialized = false;
+    config = createDefaultConfig(defaultProjectName(rootDir));
+  }
+
+  if (!initialized && options.outputPlan) {
+    throw new Error("Cannot use --output-plan before AIWiki is initialized. Run aiwiki init --project-name <name> first.");
+  }
+
   const notes = await readNotes(rootDir, options.notes);
+  if (options.fromGitDiff && !(await isGitRepository(rootDir))) {
+    throw new Error(
+      "reflect --from-git-diff requires a Git repository. Run git init, use --notes <path>, or skip reflect until code changes are tracked."
+    );
+  }
   const diff = options.fromGitDiff ? await readGitDiff(rootDir) : "";
-  const changedFiles = extractChangedFiles(diff);
+  const status = options.fromGitDiff ? await readGitStatus(rootDir) : "";
+  const changedFiles = await filterChangedFileList(rootDir, unique([
+    ...extractChangedFiles(diff),
+    ...extractStatusChangedFiles(status)
+  ]).sort());
+  const diffLessons = extractDiffLessons(diff, changedFiles);
   const query = searchQuery(changedFiles, notes);
   const search = query.length > 0
     ? await searchWikiMemory(rootDir, query, {
@@ -627,18 +948,22 @@ export async function generateReflectPreview(
   const matchingPatterns = matchingTitles(results, "pattern");
   const matchingRules = matchingTitles(results, "rule");
   const noteSummary = firstNonEmptyLine(notes);
-  const updatePlanDraft = buildReflectUpdatePlanDraft(
-    noteSummary,
-    notes,
-    changedFiles,
-    results,
-    modules,
-    riskyFiles,
-    refreshPages
-  );
+  const updatePlanDraft = initialized
+    ? buildReflectUpdatePlanDraft(
+        noteSummary,
+        notes,
+        changedFiles,
+        results,
+        modules,
+        riskyFiles,
+        refreshPages,
+        diffLessons
+      )
+    : undefined;
 
   const preview: ReflectPreview = {
     projectName: config.projectName,
+    initialized,
     fromGitDiff: options.fromGitDiff ?? false,
     notesPath: options.notes,
     changedFiles,
@@ -650,8 +975,11 @@ export async function generateReflectPreview(
         fallback(
           [
             noteSummary ? `Notes summary: ${noteSummary}` : undefined,
+            initialized
+              ? undefined
+              : "Cold-start mode: no .aiwiki memory was loaded and no AIWiki files were written.",
             options.fromGitDiff
-              ? `Git diff changed ${changedFiles.length} file(s).`
+              ? `Git diff changed ${changedFiles.length} file(s). Includes untracked files from git status.`
               : "No git diff was requested."
           ].filter((item): item is string => Boolean(item)),
           "No notes or git diff input was provided."
@@ -660,6 +988,7 @@ export async function generateReflectPreview(
       section(
         "New Lessons",
         [
+          ...diffLessons.map((lesson) => `${lesson.title}: ${lesson.summary}`),
           "Extract only reusable lessons from the notes and diff before writing long-term memory.",
           "Keep one-off implementation details in raw notes or session logs unless they affect future work."
         ]
@@ -724,6 +1053,11 @@ export async function generateReflectPreview(
               "No wiki pages are written until apply --confirm.",
               "Future confirmed writes should update wiki pages, index, log, and graph consistently."
             ]
+          : !initialized
+            ? [
+                "No structured wiki writes are planned because AIWiki is not initialized.",
+                "Run aiwiki init --project-name <name> and aiwiki map --write before generating output plans."
+              ]
           : [
               "No structured wiki writes are planned by this preview.",
               "Future confirmed writes should update wiki pages, index, log, and graph consistently."
@@ -749,7 +1083,7 @@ export async function generateReflectPreview(
     );
   }
 
-  if (!options.readOnly) {
+  if (initialized && !options.readOnly) {
     await appendReflectEvalCase(rootDir, preview);
   }
 

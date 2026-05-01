@@ -3,6 +3,25 @@
 This file summarizes the implementation history that used to live in root-level
 `implementation-m*.md` files. Full milestone notes are archived under `docs/archive/`.
 
+## 2026-05-01
+
+### Codex Work Graph
+
+- Added `aiwiki prime` as a compact startup dashboard for active task, ready work, memory health, and next commands.
+- Added local ready-work task flow: `task create`, `task ready`, `task claim`, `task discover`, and `task dep add`.
+- Extended task metadata with type, priority, assignee, claim time, and typed dependencies.
+- Extended task JSONL events with task lifecycle, claim, dependency, discovery, and close events.
+- Added `aiwiki schema` for task metadata, task event, and prime JSON schemas.
+- Added structured JSON error output when commands are invoked with `--format json`.
+
+### Reflect, Guard, and Doctor Hardening
+
+- Improved `reflect --from-git-diff` so it includes untracked files from `git status`, supports cold-start read-only previews, extracts concrete work-graph and semantic-risk lessons, and suggests freshness refreshes for wiki pages that reference changed files.
+- Added grouped `doctor` stale-memory findings so repeated file warnings are summarized by page.
+- Improved `prime` memory-health wording so stale warnings are not described as lint errors.
+- Added built-in semantic guard risk signals for database, frontend hydration, browser-only runtime, Python, Java, JavaScript/TypeScript, and C change surfaces.
+- Added `aiwiki eval large-repos` as a maintainer smoke eval for cold-start `prime`, `codex --team`, and representative `guard` behavior across sparse large-repository fixtures.
+
 ## 2026-04-29
 
 ### Current CLI Surface

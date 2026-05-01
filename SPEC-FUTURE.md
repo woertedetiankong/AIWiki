@@ -1,6 +1,6 @@
 # AIWiki Future Specification
 
-Status: Draft backlog, refreshed after Codex dogfood and staleness hardening passes on 2026-04-29.
+Status: Draft backlog, refreshed after Codex dogfood and work-graph hardening passes on 2026-05-01.
 
 Purpose: Track optional and not-yet-implemented AIWiki capabilities separately from `SPEC.md`,
 which describes the current implemented CLI contract.
@@ -11,8 +11,9 @@ for durable memory writes, and covered by tests before it moves into `SPEC.md`.
 ## Current Dogfood Baseline
 
 The 2026-04-29 Codex dogfood pass made the current local CLI usable as an alpha
-Codex project-memory workflow. The following should be treated as implemented
-baseline, not future backlog:
+Codex project-memory workflow, and the 2026-05-01 pass added work-graph,
+reflect, guard, doctor, and eval hardening. The following should be treated as
+implemented baseline, not future backlog:
 
 - `brief` and `guard` can run in read-only cold-start mode before `.aiwiki/`
   exists.
@@ -36,6 +37,24 @@ baseline, not future backlog:
   Codex context gathering with no filesystem writes.
 - `module brief` uses the same compact Codex-facing section style as `brief` and
   `guard`.
+- `prime` provides a compact Codex startup dashboard with active task, ready
+  work, memory health, and next commands.
+- The task layer supports local ready-work flow with open tasks, blocking
+  dependencies, claim hints, and discovered follow-up tasks.
+- `schema` exposes task metadata, task event, and prime JSON schemas for agent
+  integrations.
+- `doctor` groups stale referenced-file warnings by wiki page so stale-memory
+  output stays concise.
+- `guard` includes built-in semantic risk signals for database, frontend
+  hydration, browser-only runtime, Python, Java, JavaScript/TypeScript, and C
+  changes.
+- `reflect --from-git-diff` includes untracked files from `git status`, supports
+  cold-start read-only previews, extracts concrete work-graph and semantic-risk
+  lessons, and suggests refresh entries for wiki pages whose `files`
+  frontmatter references changed files.
+- `eval large-repos` provides a maintainer smoke eval for cold-start `prime`,
+  `codex --team`, and representative `guard` behavior across sparse large-repo
+  fixtures.
 - Project scans combine built-in generated/dependency ignores, repository
   `.gitignore`, and `.aiwiki/config.json` `ignore` overrides.
 - Cold-start `brief` ranking was dogfooded and tuned on a mixed PMS repository
@@ -49,8 +68,8 @@ Start the next implementation session here before taking on larger adapters:
 1. Run the dogfood loop on this repository:
    `brief`, targeted `guard`, `resume`, `reflect --from-git-diff --output-plan`,
    and `apply <plan>` preview.
-2. Extend `reflect --from-git-diff` so changed files can suggest refresh entries
-   for related stale wiki pages.
+2. Improve the specificity of generated `reflect --from-git-diff` refresh
+   entries when the candidate text is too generic.
 3. Improve install/dev command ergonomics, especially Windows + npm argument
    forwarding.
 4. Continue cross-project dogfood when changing ranking or scan heuristics.
@@ -108,8 +127,9 @@ Implemented first slice:
 
 Remaining planned behavior:
 
-- `aiwiki reflect --from-git-diff` SHOULD map changed files back to related wiki
-  pages and suggest append/update plan entries when those pages may need refresh.
+- `aiwiki reflect --from-git-diff` SHOULD keep improving candidate text quality
+  for related wiki-page refreshes, especially when several changed files map to
+  the same memory page.
 - Future freshness checks MAY use git history when it improves precision, but
   MUST keep filesystem-only behavior available.
 - Future commands that show selected memory SHOULD reuse the shared staleness

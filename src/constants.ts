@@ -6,6 +6,10 @@ export const AGENTS_PATH = `${AIWIKI_DIR}/AGENTS.md`;
 export const INDEX_PATH = `${AIWIKI_DIR}/index.md`;
 export const LOG_PATH = `${AIWIKI_DIR}/log.md`;
 export const WIKI_DIR = `${AIWIKI_DIR}/wiki`;
+export const CACHE_DIR = `${AIWIKI_DIR}/cache`;
+export const SNAPSHOTS_DIR = `${AIWIKI_DIR}/snapshots`;
+export const HYBRID_INDEX_DB_PATH = `${CACHE_DIR}/index.sqlite`;
+export const HYBRID_INDEX_JSONL_PATH = `${SNAPSHOTS_DIR}/wiki-pages.jsonl`;
 export const GRAPH_DIR = `${AIWIKI_DIR}/graph`;
 export const GRAPH_JSON_PATH = `${GRAPH_DIR}/graph.json`;
 export const BACKLINKS_JSON_PATH = `${GRAPH_DIR}/backlinks.json`;
@@ -83,6 +87,8 @@ export const AIWIKI_DIRECTORIES = [
   `${AIWIKI_DIR}/sources/raw-notes`,
   `${AIWIKI_DIR}/sources/git-diffs`,
   `${AIWIKI_DIR}/sources/ai-summaries`,
+  CACHE_DIR,
+  SNAPSHOTS_DIR,
   MODULE_PACKS_DIR,
   TASKS_DIR,
   `${WIKI_DIR}/modules`,
@@ -225,6 +231,11 @@ export const RISK_FILE_KEYWORDS = [
   "payment",
   "stripe",
   "webhook",
+  "checkout",
+  "charge",
+  "amount",
+  "invoice",
+  "subscription",
   "migration",
   "schema",
   "security",

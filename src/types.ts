@@ -117,21 +117,55 @@ export interface GraphJson {
   edges: GraphEdge[];
 }
 
-export type TaskStatus = "in_progress" | "done" | "paused" | "cancelled";
+export type TaskStatus =
+  | "open"
+  | "in_progress"
+  | "blocked"
+  | "deferred"
+  | "done"
+  | "paused"
+  | "cancelled";
+
+export type TaskType = "task" | "bug" | "feature" | "epic" | "chore";
+
+export type TaskDependencyType =
+  | "blocks"
+  | "parent_child"
+  | "related"
+  | "discovered_from";
+
+export interface TaskDependency {
+  id: string;
+  type: TaskDependencyType;
+  created_at: string;
+}
 
 export interface TaskMetadata {
   id: string;
   title: string;
   status: TaskStatus;
+  type?: TaskType;
+  priority?: number;
+  assignee?: string;
+  claimed_at?: string;
   created_at: string;
   updated_at: string;
   closed_at?: string;
   prd?: string;
+  dependencies?: TaskDependency[];
 }
 
 export interface TaskCheckpoint {
   time: string;
-  type: "checkpoint" | "decision" | "blocker";
+  type:
+    | "checkpoint"
+    | "decision"
+    | "blocker"
+    | "task_created"
+    | "task_claimed"
+    | "dependency_added"
+    | "task_discovered"
+    | "task_closed";
   message?: string;
   step?: string;
   status?: string;
@@ -140,4 +174,9 @@ export interface TaskCheckpoint {
   files?: string[];
   module?: string;
   severity?: RiskLevel;
+  actor?: string;
+  task_id?: string;
+  dependency_id?: string;
+  dependency_type?: TaskDependencyType;
+  from?: string;
 }

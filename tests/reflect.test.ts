@@ -70,6 +70,50 @@ async function initGitProject(rootDir: string): Promise<void> {
 }
 
 describe("generateReflectPreview", () => {
+  it("supports cold-start read-only git reflection and includes untracked files", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/existing.ts", "export const value = 1;\n");
+    await initGitProject(rootDir);
+    await writeProjectFile(rootDir, "src/existing.ts", "export const value = 2;\n");
+    await writeProjectFile(rootDir, "src/new-file.ts", "export const created = true;\n");
+    await writeProjectFile(rootDir, "scratch/local.md", "# Local note\n");
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.preview.initialized).toBe(false);
+    expect(result.preview.changedFiles).toEqual([
+      "scratch/local.md",
+      "src/existing.ts",
+      "src/new-file.ts"
+    ]);
+    expect(result.preview.changedFiles).not.toContain("scratch/");
+    expect(result.preview.updatePlanDraft).toBeUndefined();
+    expect(result.markdown).toContain("Cold-start mode");
+    expect(result.markdown).toContain("Includes untracked files from git status");
+
+    await expect(
+      generateReflectPreview(rootDir, {
+        fromGitDiff: true,
+        outputPlan: ".aiwiki/context-packs/reflect-plan.json"
+      })
+    ).rejects.toThrow("Cannot use --output-plan before AIWiki is initialized");
+  });
+
+  it("rejects git reflection in non-git projects with a short recovery hint", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/example.ts", "export const value = 1;\n");
+
+    await expect(
+      generateReflectPreview(rootDir, {
+        fromGitDiff: true,
+        readOnly: true
+      })
+    ).rejects.toThrow("reflect --from-git-diff requires a Git repository");
+  });
+
   it("generates a notes-based reflection preview without wiki writes", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -135,6 +179,167 @@ describe("generateReflectPreview", () => {
     expect(result.markdown).toContain(
       "Consider whether changes to src/app/api/auth/route.ts introduced a reusable pitfall."
     );
+  });
+
+  it("extracts specific work graph lessons from git diff", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "src/task.ts", "export const task = 'baseline';\n");
+    await writeProjectFile(rootDir, "src/prime.ts", "export const prime = 'baseline';\n");
+    await writeProjectFile(rootDir, "src/schema.ts", "export const schema = 'baseline';\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+
+    await writeProjectFile(
+      rootDir,
+      "src/task.ts",
+      [
+        "export function readyTasks() {",
+        "  return 'open tasks with no unfinished blocking dependencies';",
+        "}",
+        "",
+        "export function claimTask() {",
+        "  return 'Claims are coordination hints, not locks. Use --force when blockers remain.';",
+        "}",
+        ""
+      ].join("\n")
+    );
+    await writeProjectFile(
+      rootDir,
+      "src/prime.ts",
+      "export const prime = 'AIWiki Prime active task ready work memory health next commands';\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      "src/schema.ts",
+      "export const schema = 'Schema name: all, task, task-event, or prime agent-facing data';\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.markdown).toContain("Task: `task ready` exposes open work");
+    expect(result.markdown).toContain("Task claims are coordination hints, not locks");
+    expect(result.markdown).toContain("Blocked task claims require explicit force");
+    expect(result.markdown).toContain("Prime: `aiwiki prime` is the Codex startup dashboard");
+    expect(result.markdown).toContain("Schema: `aiwiki schema` is the agent-facing contract surface");
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "module",
+          title: "Task",
+          summary: expect.stringContaining("`task ready` exposes open work")
+        }),
+        expect.objectContaining({
+          type: "decision",
+          title: "Task claims are coordination hints, not locks"
+        }),
+        expect.objectContaining({
+          type: "rule",
+          title: "Blocked task claims require explicit force"
+        }),
+        expect.objectContaining({
+          type: "module",
+          title: "Prime"
+        }),
+        expect.objectContaining({
+          type: "module",
+          title: "Schema"
+        })
+      ])
+    );
+  });
+
+  it("extracts concrete changed-file risk lessons from git diff", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "db/schema.sql", "CREATE TABLE posts (id TEXT);\n");
+    await writeProjectFile(rootDir, "app/layout.tsx", "export default function Layout() { return null; }\n");
+    await writeProjectFile(rootDir, "lib/wechat-copy.ts", "export function copy() { return true; }\n");
+    await writeProjectFile(rootDir, "src/checkout.ts", "export const checkout = true;\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+
+    await writeProjectFile(
+      rootDir,
+      "db/schema.sql",
+      "CREATE VIRTUAL TABLE posts_fts USING fts5(title, content);\nCREATE TRIGGER posts_fts_update AFTER UPDATE ON posts BEGIN SELECT 1; END;\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      "app/layout.tsx",
+      "\"use client\";\nimport { useEffect } from 'react';\nexport default function Layout() { useEffect(() => localStorage.getItem('theme'), []); return null; }\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      "lib/wechat-copy.ts",
+      "export async function pdf() { const html2pdf = await import('html2pdf.js'); document.title = String(html2pdf); }\n"
+    );
+    await writeProjectFile(
+      rootDir,
+      "src/checkout.ts",
+      "export function chargeOrder(amountCents: number, currency: string) { return { amountCents, currency }; }\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.markdown).toContain("Database migrations must reach existing deployments");
+    expect(result.markdown).toContain("FTS trigger changes need search regression checks");
+    expect(result.markdown).toContain("Theme hydration can flash after first paint");
+    expect(result.markdown).toContain("Browser-only libraries stay out of server bundles");
+    expect(result.markdown).toContain("Money flows need idempotency and amount checks");
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "pitfall",
+          title: "Database migrations must reach existing deployments"
+        }),
+        expect.objectContaining({
+          type: "pattern",
+          title: "Browser-only libraries stay out of server bundles"
+        }),
+        expect.objectContaining({
+          type: "pitfall",
+          title: "Money flows need idempotency and amount checks"
+        })
+      ])
+    );
+  });
+
+  it("extracts priority language risk lessons from git diff", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "pyproject.toml", "[project]\nname = 'demo'\n");
+    await writeProjectFile(rootDir, "src/main/java/UserService.java", "class UserService {}\n");
+    await writeProjectFile(rootDir, "Makefile", "all:\n\tcc src/buffer.c\n");
+    await writeProjectFile(rootDir, "src/buffer.c", "int main(void) { return 0; }\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+
+    await writeProjectFile(rootDir, "pyproject.toml", "[project]\nname = 'demo'\ndependencies = ['requests']\n");
+    await writeProjectFile(
+      rootDir,
+      "src/main/java/UserService.java",
+      "import org.springframework.transaction.annotation.Transactional;\nclass UserService { @Transactional synchronized void update() {} }\n"
+    );
+    await writeProjectFile(rootDir, "Makefile", "CFLAGS += -DNEW_FLAG\nall:\n\tcc src/buffer.c\n");
+    await writeProjectFile(
+      rootDir,
+      "src/buffer.c",
+      "#include <string.h>\nvoid copy(char *dst, char *src) { strcpy(dst, src); }\n"
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.markdown).toContain("Python dependency changes need environment smoke tests");
+    expect(result.markdown).toContain("Java transaction and concurrency changes need race-path checks");
+    expect(result.markdown).toContain("C build-system changes need platform matrix checks");
+    expect(result.markdown).toContain("C memory changes need sanitizer-minded review");
   });
 
   it("generates module and pitfall draft entries from high-risk changed files", async () => {

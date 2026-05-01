@@ -162,6 +162,29 @@ describe("generateFileGuardrails", () => {
     expect(result.markdown).toContain("wiki/files/src-unknown.md");
   });
 
+  it("does not overmatch generic missing-file path tokens", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    const wikiDir = path.join(rootDir, ".aiwiki", "wiki", "pitfalls");
+    await mkdir(wikiDir, { recursive: true });
+    await writeMarkdownFile(
+      path.join(wikiDir, "generic-file-write.md"),
+      {
+        type: "pitfall",
+        title: "Generic file write",
+        modules: ["storage"],
+        severity: "high"
+      },
+      "# Pitfall: Generic file write\n\nMissing file handling can create noisy guard output.\n"
+    );
+
+    const result = await generateFileGuardrails(rootDir, "definitely-missing-file.ts");
+
+    expect(result.guardrails.matchedDocs).toEqual([]);
+    expect(result.markdown).not.toContain("Generic file write");
+    expect(result.markdown).toContain("No matching pitfalls found.");
+  });
+
   it("suggests nearby tests and file signals for source files", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -191,6 +214,97 @@ describe("generateFileGuardrails", () => {
     expect(parsed.fileSignals).toMatchObject({ exists: true, lines: 2 });
     expect(parsed.fileSignals.imports).toContain("./helper.js");
     expect(parsed.fileNoteRecommended).toBe(true);
+  });
+
+  it("surfaces semantic risks for database, hydration, and browser-only changes", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "db", "migrations"), { recursive: true });
+    await mkdir(path.join(rootDir, "scripts"), { recursive: true });
+    await mkdir(path.join(rootDir, "components"), { recursive: true });
+    await mkdir(path.join(rootDir, "lib"), { recursive: true });
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "db", "schema.sql"),
+      "CREATE VIRTUAL TABLE posts_fts USING fts5(title, content);\nCREATE TRIGGER posts_fts_update AFTER UPDATE ON posts BEGIN SELECT 1; END;\n",
+      "utf8"
+    );
+    await writeFile(path.join(rootDir, "scripts", "cf-deploy.sh"), "wrangler d1 execute DB --file db/schema.sql\n", "utf8");
+    await writeFile(path.join(rootDir, "scripts", "cf-init.sh"), "wrangler d1 execute DB --file db/schema.sql\n", "utf8");
+    await writeFile(
+      path.join(rootDir, "components", "AppearanceHydrator.tsx"),
+      "\"use client\";\nimport { useEffect } from 'react';\nexport function AppearanceHydrator() { useEffect(() => localStorage.getItem('theme'), []); return null; }\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "lib", "wechat-copy.ts"),
+      "export async function pdf() { const html2pdf = await import('html2pdf.js'); document.title = String(html2pdf); }\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "src", "checkout.ts"),
+      "export function chargeOrder(amountCents: number, currency: string) { return { amountCents, currency }; }\n",
+      "utf8"
+    );
+
+    const schema = await generateFileGuardrails(rootDir, "db/schema.sql");
+    const appearance = await generateFileGuardrails(rootDir, "components/AppearanceHydrator.tsx");
+    const browserOnly = await generateFileGuardrails(rootDir, "lib/wechat-copy.ts");
+    const checkout = await generateFileGuardrails(rootDir, "src/checkout.ts", {
+      architectureGuard: true
+    });
+
+    expect(schema.markdown).toContain("## Change Risks");
+    expect(schema.markdown).toContain("Database schema or migration change");
+    expect(schema.markdown).toContain("scripts/cf-deploy.sh");
+    expect(schema.markdown).toContain("FTS/trigger change");
+    expect(appearance.markdown).toContain("Appearance hydration change");
+    expect(browserOnly.markdown).toContain("Browser-only API/library usage");
+    expect(checkout.markdown).toContain("Money/payment flow change");
+    expect(checkout.markdown).toContain("checkout, charge/amount handling");
+  });
+
+  it("surfaces priority language risks for Python, Java, JS/TS, and C projects", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "app"), { recursive: true });
+    await mkdir(path.join(rootDir, "src", "main", "java"), { recursive: true });
+    await mkdir(path.join(rootDir, "src", "app", "api", "auth"), { recursive: true });
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "pyproject.toml"), "[project]\nname = 'demo'\n", "utf8");
+    await writeFile(path.join(rootDir, "pom.xml"), "<project></project>\n", "utf8");
+    await writeFile(path.join(rootDir, "package.json"), "{\"scripts\":{\"test\":\"vitest\"}}\n", "utf8");
+    await writeFile(path.join(rootDir, "Makefile"), "all:\n\tcc src/buffer.c\n", "utf8");
+    await writeFile(
+      path.join(rootDir, "app", "routes.py"),
+      "import subprocess\n@app.route('/run')\ndef run(): subprocess.run(['echo'])\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "src", "main", "java", "UserController.java"),
+      "@RestController class UserController { synchronized void update() {} }\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "src", "app", "api", "auth", "route.ts"),
+      "export const token = process.env.SECRET_TOKEN;\n",
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "src", "buffer.c"),
+      "void copy(char *dst, char *src) { strcpy(dst, src); }\n",
+      "utf8"
+    );
+
+    const python = await generateFileGuardrails(rootDir, "app/routes.py");
+    const java = await generateFileGuardrails(rootDir, "src/main/java/UserController.java");
+    const ts = await generateFileGuardrails(rootDir, "src/app/api/auth/route.ts");
+    const c = await generateFileGuardrails(rootDir, "src/buffer.c");
+
+    expect(python.markdown).toContain("Python web/API boundary change");
+    expect(python.markdown).toContain("Python runtime/security-sensitive code");
+    expect(java.markdown).toContain("Java controller/API boundary change");
+    expect(java.markdown).toContain("Java transaction/concurrency-sensitive change");
+    expect(ts.markdown).toContain("Server/API boundary change");
+    expect(c.markdown).toContain("C memory-safety-sensitive change");
   });
 
   it("surfaces staleness warnings for matched file memory", async () => {

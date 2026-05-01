@@ -22,6 +22,7 @@ export {
 export {
   BACKLINKS_JSON_PATH,
   BRIEF_EVALS_PATH,
+  CACHE_DIR,
   AIWIKI_DIR,
   AIWIKI_VERSION,
   ARCHITECTURE_HARDCODING_TOPICS,
@@ -37,6 +38,8 @@ export {
   GENERATED_FILE_CANDIDATES,
   GRAPH_DIR,
   GRAPH_JSON_PATH,
+  HYBRID_INDEX_DB_PATH,
+  HYBRID_INDEX_JSONL_PATH,
   IMPORTANT_DIRECTORY_CANDIDATES,
   LOG_PATH,
   MODULE_PACKS_DIR,
@@ -46,6 +49,7 @@ export {
   RAW_NOTES_DIR,
   REFLECT_EVALS_PATH,
   RISK_FILE_KEYWORDS,
+  SNAPSHOTS_DIR,
   ACTIVE_TASK_PATH,
   TASKS_DIR,
   WIKI_DIR
@@ -54,6 +58,10 @@ export {
   doctorWiki,
   formatDoctorReportMarkdown
 } from "./doctor.js";
+export {
+  toStructuredCliError,
+  wantsJsonError
+} from "./errors.js";
 export {
   formatDevelopmentBriefMarkdown,
   generateDevelopmentBrief
@@ -81,9 +89,45 @@ export {
   generateFileGuardrails
 } from "./guard.js";
 export {
+  buildHybridIndex,
+  formatHybridIndexBuildMarkdown,
+  formatHybridIndexBuildResult,
+  formatHybridIndexStatus,
+  formatHybridIndexStatusMarkdown,
+  getHybridIndexStatus,
+  readIndexedWikiPages
+} from "./hybrid-index.js";
+export {
+  detectFileLanguage,
+  detectProjectProfile,
+  diffRiskLessonsFromChanges,
+  representativeRiskFiles,
+  semanticChangeRiskMessages,
+  semanticChangeRisksForFile
+} from "./risk-rules.js";
+export type {
+  DiffRiskLesson,
+  ProjectProfile,
+  SemanticRisk,
+  SemanticRiskInput,
+  SupportedProjectLanguage
+} from "./risk-rules.js";
+export {
   formatIngestPreviewMarkdown,
   generateIngestPreview
 } from "./ingest.js";
+export {
+  DEFAULT_LARGE_REPO_FIXTURES,
+  runLargeRepoEval
+} from "./large-repo-eval.js";
+export type {
+  LargeRepoEvalOptions,
+  LargeRepoEvalResult,
+  LargeRepoFixture,
+  LargeRepoFixtureResult,
+  LargeRepoGuardCheck,
+  LargeRepoGuardCheckResult
+} from "./large-repo-eval.js";
 export { initAIWiki } from "./init.js";
 export {
   formatLintReportMarkdown,
@@ -118,6 +162,9 @@ export {
   generateProjectMap
 } from "./project-map.js";
 export {
+  generatePrimeContext
+} from "./prime.js";
+export {
   formatRulePromotionPreviewMarkdown,
   generateRulePromotionPreview
 } from "./promote-rules.js";
@@ -125,12 +172,21 @@ export {
   formatReflectPreviewMarkdown,
   generateReflectPreview
 } from "./reflect.js";
+export {
+  getSchemaResult,
+  parseSchemaName
+} from "./schema.js";
 export { searchWikiMemory } from "./search.js";
 export {
+  addTaskDependency,
   checkpointTask,
   closeTask,
+  claimTask,
+  createTask,
+  discoverTask,
   getTaskStatus,
   listTasks,
+  readyTasks,
   recordTaskBlocker,
   recordTaskDecision,
   resumeTask,
@@ -206,6 +262,12 @@ export type {
   IngestSection
 } from "./ingest.js";
 export type {
+  HybridIndexBuildResult,
+  HybridIndexOptions,
+  HybridIndexRecord,
+  HybridIndexStatus
+} from "./hybrid-index.js";
+export type {
   LintIssue,
   LintReport,
   LintResult,
@@ -238,6 +300,12 @@ export type {
   ProjectMapResult
 } from "./project-map.js";
 export type {
+  PrimeAction,
+  PrimeContext,
+  PrimeOptions,
+  PrimeResult
+} from "./prime.js";
+export type {
   PromoteRulesOptions,
   RulePromotionCandidate,
   RulePromotionPreview,
@@ -256,13 +324,25 @@ export type {
   SearchResult
 } from "./search.js";
 export type {
+  SchemaName,
+  SchemaResult
+} from "./schema.js";
+export type {
   TaskCheckpointOptions,
+  TaskClaimOptions,
   TaskCloseOptions,
   TaskCommandResult,
   TaskBlockerOptions,
+  TaskCreateOptions,
+  TaskDependencyData,
+  TaskDependencyOptions,
   TaskDecisionOptions,
+  TaskDiscoverOptions,
   TaskListData,
   TaskListOptions,
+  TaskReadyData,
+  TaskReadyItem,
+  TaskReadyOptions,
   TaskResumeData,
   TaskResumeOptions,
   TaskStartOptions,
@@ -285,8 +365,11 @@ export type {
   LogEntry,
   RiskLevel,
   TaskCheckpoint,
+  TaskDependency,
+  TaskDependencyType,
   TaskMetadata,
   TaskStatus,
+  TaskType,
   WikiPage,
   WikiPageFrontmatter,
   WikiPageStatus,

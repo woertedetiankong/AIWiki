@@ -7,9 +7,16 @@ import { generateDevelopmentBrief } from "./brief.js";
 import { generateCodexRunbook } from "./codex.js";
 import { AIWIKI_VERSION } from "./constants.js";
 import { doctorWiki } from "./doctor.js";
+import { toStructuredCliError, wantsJsonError } from "./errors.js";
 import { buildWikiGraph, relateGraphFile } from "./graph.js";
 import { importGraphifyContext } from "./graphify.js";
 import { generateFileGuardrails } from "./guard.js";
+import {
+  buildHybridIndex,
+  formatHybridIndexBuildResult,
+  formatHybridIndexStatus,
+  getHybridIndexStatus
+} from "./hybrid-index.js";
 import { initAIWiki } from "./init.js";
 import {
   formatSearchResponse,
@@ -17,6 +24,7 @@ import {
   parsePositiveInteger
 } from "./output.js";
 import { generateIngestPreview } from "./ingest.js";
+import { runLargeRepoEval } from "./large-repo-eval.js";
 import { lintWiki } from "./lint.js";
 import {
   exportModulePack,
@@ -25,20 +33,33 @@ import {
   lintModuleMemory
 } from "./module-pack.js";
 import { generateProjectMap } from "./project-map.js";
+import { generatePrimeContext } from "./prime.js";
 import { generateRulePromotionPreview } from "./promote-rules.js";
 import { generateReflectPreview } from "./reflect.js";
+import { getSchemaResult, parseSchemaName } from "./schema.js";
 import { searchWikiMemory } from "./search.js";
 import {
+  addTaskDependency,
   checkpointTask,
   closeTask,
+  claimTask,
+  createTask,
+  discoverTask,
   getTaskStatus,
   listTasks,
+  readyTasks,
   recordTaskBlocker,
   recordTaskDecision,
   resumeTask,
   startTask
 } from "./task.js";
-import type { RiskLevel, TaskStatus, WikiPageType } from "./types.js";
+import type {
+  RiskLevel,
+  TaskDependencyType,
+  TaskStatus,
+  TaskType,
+  WikiPageType
+} from "./types.js";
 import { wikiPageTypeSchema } from "./wiki-frontmatter.js";
 
 const program = new Command();
@@ -50,6 +71,9 @@ function parseTaskStatus(value: string | undefined): TaskStatus | undefined {
 
   if (
     value === "in_progress" ||
+    value === "open" ||
+    value === "blocked" ||
+    value === "deferred" ||
     value === "done" ||
     value === "paused" ||
     value === "cancelled"
@@ -58,6 +82,51 @@ function parseTaskStatus(value: string | undefined): TaskStatus | undefined {
   }
 
   throw new Error(`Unsupported task status: ${value}`);
+}
+
+function parseTaskType(value: string | undefined): TaskType | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    value === "task" ||
+    value === "bug" ||
+    value === "feature" ||
+    value === "epic" ||
+    value === "chore"
+  ) {
+    return value;
+  }
+
+  throw new Error(`Unsupported task type: ${value}`);
+}
+
+function parseDependencyType(value: string | undefined): TaskDependencyType | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    value === "blocks" ||
+    value === "parent_child" ||
+    value === "related" ||
+    value === "discovered_from"
+  ) {
+    return value;
+  }
+
+  throw new Error(`Unsupported dependency type: ${value}`);
+}
+
+function parsePriority(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 4) {
+    throw new Error(`Task priority must be an integer from 0 to 4, received: ${value}`);
+  }
+
+  return parsed;
 }
 
 function parseRiskLevel(value: string | undefined): RiskLevel | undefined {
@@ -77,10 +146,43 @@ function parseRiskLevel(value: string | undefined): RiskLevel | undefined {
   throw new Error(`Unsupported severity: ${value}`);
 }
 
+function parseFixtureNames(values: string[] | undefined): string[] | undefined {
+  const names = values
+    ?.flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  return names && names.length > 0 ? names : undefined;
+}
+
 program
   .name("aiwiki")
   .description("Local-first AI coding memory and context engineering CLI.")
-  .version(AIWIKI_VERSION);
+  .version(AIWIKI_VERSION)
+  .showHelpAfterError("(run `aiwiki <command> --help` for command usage)");
+
+program
+  .command("prime")
+  .description("Show the compact AIWiki startup context for Codex.")
+  .option("--limit <n>", "Maximum number of ready tasks to include")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (options: { limit?: string; format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await generatePrimeContext(process.cwd(), {
+      limit: parsePositiveInteger(options.limit)
+    });
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
+
+program
+  .command("schema")
+  .description("Print JSON schemas for AIWiki agent-facing data.")
+  .argument("[name]", "Schema name: all, task, task-event, or prime", "all")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (name: string | undefined, options: { format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = getSchemaResult(parseSchemaName(name));
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
 
 program
   .command("codex")
@@ -172,11 +274,12 @@ program
   .argument("<query>", "Search query")
   .option("--type <type>", "Restrict results to a wiki page type")
   .option("--limit <n>", "Maximum number of results")
+  .option("--index", "Search the derived SQLite index when it exists", false)
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
       query: string,
-      options: { type?: string; limit?: string; format?: string }
+      options: { type?: string; limit?: string; index?: boolean; format?: string }
     ) => {
       const format = parseOutputFormat(options.format);
       const parsedType = options.type
@@ -184,7 +287,8 @@ program
         : undefined;
       const response = await searchWikiMemory(process.cwd(), query, {
         type: parsedType as WikiPageType | undefined,
-        limit: parsePositiveInteger(options.limit)
+        limit: parsePositiveInteger(options.limit),
+        useIndex: options.index
       });
 
       process.stdout.write(formatSearchResponse(response, format));
@@ -291,6 +395,33 @@ const architectureCommand = program
   .command("architecture")
   .description("Inspect architecture health and portability risks.");
 
+const indexCommand = program
+  .command("index")
+  .description("Manage the AIWiki hybrid SQLite index and JSONL snapshot.");
+
+indexCommand
+  .command("build")
+  .description("Rebuild the derived SQLite wiki index and JSONL snapshot.")
+  .option("--no-jsonl", "Skip writing the JSONL snapshot")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (options: { jsonl?: boolean; format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await buildHybridIndex(process.cwd(), {
+      exportJsonl: options.jsonl
+    });
+    process.stdout.write(formatHybridIndexBuildResult(result, format));
+  });
+
+indexCommand
+  .command("status")
+  .description("Show whether the hybrid SQLite index and JSONL snapshot exist.")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (options: { format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const status = await getHybridIndexStatus(process.cwd());
+    process.stdout.write(formatHybridIndexStatus(status, format));
+  });
+
 architectureCommand
   .command("audit")
   .description("Report architecture, hardcoding, and module memory risks.")
@@ -300,6 +431,40 @@ architectureCommand
     const result = await generateArchitectureAudit(process.cwd());
     process.stdout.write(format === "json" ? result.json : result.markdown);
   });
+
+const evalCommand = program
+  .command("eval")
+  .description("Run AIWiki quality evals against repeatable fixtures.");
+
+evalCommand
+  .command("large-repos")
+  .description("Smoke-test AIWiki on sparse checkouts of large open-source repositories.")
+  .option("--cache-dir <path>", "Directory for cached fixture checkouts")
+  .option("--fixture <name...>", "Fixture name(s) to run; can be repeated or comma-separated")
+  .option("--skip-clone", "Use existing cached checkouts without cloning missing repos", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      options: {
+        cacheDir?: string;
+        fixture?: string[];
+        skipClone?: boolean;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await runLargeRepoEval({
+        cacheDir: options.cacheDir,
+        fixtureNames: parseFixtureNames(options.fixture),
+        skipClone: options.skipClone,
+        format
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+      if (!result.passed) {
+        process.exitCode = 1;
+      }
+    }
+  );
 
 const moduleCommand = program
   .command("module")
@@ -591,16 +756,60 @@ taskCommand
   .argument("<task>", "Task title or original request")
   .option("--id <id>", "Explicit task id")
   .option("--prd <path>", "Project-local PRD/source document path")
+  .option("--type <type>", "Task type: task, bug, feature, epic, chore")
+  .option("--priority <n>", "Priority 0-4 where 0 is highest")
+  .option("--actor <actor>", "Assignee/actor claiming the task")
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
       task: string,
-      options: { id?: string; prd?: string; format?: string }
+      options: {
+        id?: string;
+        prd?: string;
+        type?: string;
+        priority?: string;
+        actor?: string;
+        format?: string;
+      }
     ) => {
       const format = parseOutputFormat(options.format);
       const result = await startTask(process.cwd(), task, {
         id: options.id,
-        prd: options.prd
+        prd: options.prd,
+        type: parseTaskType(options.type),
+        priority: parsePriority(options.priority),
+        assignee: options.actor
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+taskCommand
+  .command("create")
+  .description("Create an open AIWiki task without claiming it.")
+  .argument("<task>", "Task title or original request")
+  .option("--id <id>", "Explicit task id")
+  .option("--prd <path>", "Project-local PRD/source document path")
+  .option("--type <type>", "Task type: task, bug, feature, epic, chore")
+  .option("--priority <n>", "Priority 0-4 where 0 is highest")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      task: string,
+      options: {
+        id?: string;
+        prd?: string;
+        type?: string;
+        priority?: string;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await createTask(process.cwd(), task, {
+        id: options.id,
+        prd: options.prd,
+        type: parseTaskType(options.type),
+        priority: parsePriority(options.priority)
       });
       process.stdout.write(format === "json" ? result.json : result.markdown);
     }
@@ -609,7 +818,7 @@ taskCommand
 taskCommand
   .command("list")
   .description("List AIWiki tasks.")
-  .option("--status <status>", "Filter by status: in_progress, done, paused, cancelled")
+  .option("--status <status>", "Filter by status: open, in_progress, blocked, deferred, done, paused, cancelled")
   .option("--recent <n>", "Maximum number of recent tasks")
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
@@ -618,6 +827,91 @@ taskCommand
       const result = await listTasks(process.cwd(), {
         status: parseTaskStatus(options.status),
         recent: parsePositiveInteger(options.recent)
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+taskCommand
+  .command("ready")
+  .description("List open tasks with no unfinished blocking dependencies.")
+  .option("--limit <n>", "Maximum number of ready tasks")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (options: { limit?: string; format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await readyTasks(process.cwd(), {
+      limit: parsePositiveInteger(options.limit)
+    });
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
+
+taskCommand
+  .command("claim")
+  .description("Claim an open task as the active Codex task.")
+  .argument("[id]", "Task id; defaults to the active task")
+  .option("--actor <actor>", "Actor name to write as assignee")
+  .option("--force", "Claim even when blocking dependencies are unfinished", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(async (id: string | undefined, options: { actor?: string; force?: boolean; format?: string }) => {
+    const format = parseOutputFormat(options.format);
+    const result = await claimTask(process.cwd(), id, {
+      actor: options.actor,
+      force: options.force
+    });
+    process.stdout.write(format === "json" ? result.json : result.markdown);
+  });
+
+taskCommand
+  .command("discover")
+  .description("Create an open task discovered during current work.")
+  .argument("<task>", "Discovered task title")
+  .option("--id <id>", "Explicit task id")
+  .option("--from <id>", "Source task id; defaults to active task when present")
+  .option("--type <type>", "Task type: task, bug, feature, epic, chore")
+  .option("--priority <n>", "Priority 0-4 where 0 is highest")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      task: string,
+      options: {
+        id?: string;
+        from?: string;
+        type?: string;
+        priority?: string;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await discoverTask(process.cwd(), task, {
+        id: options.id,
+        from: options.from,
+        type: parseTaskType(options.type),
+        priority: parsePriority(options.priority)
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+const taskDepCommand = taskCommand
+  .command("dep")
+  .description("Manage AIWiki task dependencies.");
+
+taskDepCommand
+  .command("add")
+  .description("Add a dependency from a task to another task.")
+  .argument("<task>", "Task id that is blocked or related")
+  .argument("<dependency>", "Dependency/source task id")
+  .option("--type <type>", "Dependency type: blocks, parent_child, related, discovered_from", "blocks")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      task: string,
+      dependency: string,
+      options: { type?: string; format?: string }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await addTaskDependency(process.cwd(), task, dependency, {
+        type: parseDependencyType(options.type)
       });
       process.stdout.write(format === "json" ? result.json : result.markdown);
     }
@@ -641,8 +935,13 @@ taskCommand
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(async (options: { status?: string; format?: string }) => {
     const status = parseTaskStatus(options.status);
-    if (status === "in_progress") {
-      throw new Error("Close status cannot be in_progress.");
+    if (
+      status === "in_progress" ||
+      status === "open" ||
+      status === "blocked" ||
+      status === "deferred"
+    ) {
+      throw new Error("Close status must be done, paused, or cancelled.");
     }
 
     const format = parseOutputFormat(options.format);
@@ -760,6 +1059,10 @@ try {
     }
   }
 
-  console.error(error instanceof Error ? error.message : String(error));
+  if (wantsJsonError(process.argv)) {
+    console.error(JSON.stringify(toStructuredCliError(error), null, 2));
+  } else {
+    console.error(error instanceof Error ? error.message : String(error));
+  }
   process.exit(1);
 }

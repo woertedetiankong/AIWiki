@@ -1,6 +1,8 @@
+import { AIWikiNotInitializedError, loadAIWikiConfig } from "./config.js";
 import { lintWiki } from "./lint.js";
 import { generateRulePromotionPreview } from "./promote-rules.js";
 import { collectWikiStalenessWarnings } from "./staleness.js";
+import type { WikiStalenessWarning } from "./staleness.js";
 import type { WikiPage, WikiPageStatus, WikiPageType } from "./types.js";
 import { scanWikiPages } from "./wiki-store.js";
 
@@ -113,6 +115,38 @@ function longPageFindings(pages: WikiPage[]): DoctorFinding[] {
     }));
 }
 
+function isStalenessCode(code: string): boolean {
+  return code === "missing_referenced_file" || code === "stale_referenced_file";
+}
+
+function groupedStalenessFindings(warnings: WikiStalenessWarning[]): DoctorFinding[] {
+  const byPage = new Map<string, WikiStalenessWarning[]>();
+  for (const warning of warnings) {
+    const existing = byPage.get(warning.page) ?? [];
+    existing.push(warning);
+    byPage.set(warning.page, existing);
+  }
+
+  return [...byPage.entries()].map(([page, pageWarnings]) => {
+    const files = pageWarnings.map((warning) => warning.file);
+    const sample = files.slice(0, 3).join(", ");
+    const more = files.length > 3 ? `, and ${files.length - 3} more` : "";
+    const missing = pageWarnings.filter((warning) => warning.code === "missing_referenced_file").length;
+    const stale = pageWarnings.length - missing;
+    const parts = [
+      stale > 0 ? `${stale} stale` : undefined,
+      missing > 0 ? `${missing} missing` : undefined
+    ].filter((part): part is string => Boolean(part));
+
+    return {
+      severity: "warning" as const,
+      code: missing > 0 ? "referenced_file_health" : "stale_referenced_file",
+      message: `${page} has ${parts.join(" and ")} referenced file warning(s): ${sample}${more}.`,
+      path: page
+    };
+  });
+}
+
 function nextActions(report: Omit<DoctorReport, "nextActions">): string[] {
   const actions: string[] = [];
   if (report.summary.lintErrors > 0) {
@@ -187,30 +221,69 @@ function doctorToJson(report: DoctorReport): string {
   return `${JSON.stringify(report, null, 2)}\n`;
 }
 
+function coldStartDoctorReport(rootDir: string): DoctorReport {
+  return {
+    summary: {
+      pagesChecked: 0,
+      lintErrors: 0,
+      lintWarnings: 0,
+      staleWarnings: 0,
+      rulePromotionCandidates: 0,
+      proposedPages: 0,
+      uncertainPages: 0,
+      deprecatedPages: 0
+    },
+    byType: Object.fromEntries(PAGE_TYPES.map((type) => [type, 0])) as Record<WikiPageType, number>,
+    byStatus: {},
+    findings: [
+      {
+        severity: "info",
+        code: "not_initialized",
+        message: `AIWiki is not initialized in ${rootDir}; no durable memory health checks were run.`
+      }
+    ],
+    nextActions: [
+      "Run `aiwiki init --project-name <name>` to create local project memory.",
+      "Run `aiwiki map --write` after initialization to seed durable project context."
+    ]
+  };
+}
+
 export async function doctorWiki(
   rootDir: string,
   options: DoctorOptions = {}
 ): Promise<DoctorResult> {
+  try {
+    await loadAIWikiConfig(rootDir);
+  } catch (error) {
+    if (!(error instanceof AIWikiNotInitializedError)) {
+      throw error;
+    }
+
+    const report = coldStartDoctorReport(rootDir);
+    return {
+      report,
+      markdown: formatDoctorReportMarkdown(report),
+      json: doctorToJson(report)
+    };
+  }
+
   const pages = await scanWikiPages(rootDir);
   const lint = await lintWiki(rootDir);
   const stale = await collectWikiStalenessWarnings(rootDir, pages);
+  const lintIssues = lint.report.issues.filter((issue) => !isStalenessCode(issue.code));
   const promotions = await generateRulePromotionPreview(rootDir, {
     minCount: options.minRulePromotionCount
   });
   const byStatus = countByStatus(pages);
   const findings: DoctorFinding[] = [
-    ...lint.report.issues.map((issue) => ({
+    ...lintIssues.map((issue) => ({
       severity: issue.severity,
       code: issue.code,
       message: issue.message,
       path: issue.path
     })),
-    ...stale.map((warning) => ({
-      severity: "warning" as const,
-      code: warning.code,
-      message: warning.message,
-      path: warning.page
-    })),
+    ...groupedStalenessFindings(stale),
     ...promotions.preview.candidates.map((candidate) => ({
       severity: "info" as const,
       code: "rule_promotion_candidate",
@@ -223,8 +296,8 @@ export async function doctorWiki(
   const reportBase = {
     summary: {
       pagesChecked: pages.length,
-      lintErrors: lint.report.summary.errors,
-      lintWarnings: lint.report.summary.warnings,
+      lintErrors: lintIssues.filter((value) => value.severity === "error").length,
+      lintWarnings: lintIssues.filter((value) => value.severity === "warning").length,
       staleWarnings: stale.length,
       rulePromotionCandidates: promotions.preview.candidates.length,
       proposedPages: byStatus.proposed ?? 0,

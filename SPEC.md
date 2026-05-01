@@ -355,9 +355,30 @@ A task MUST include:
 - `closed_at` when closed
 - `prd` when provided
 
+A task MAY include:
+
+- `type`: `task`, `bug`, `feature`, `epic`, or `chore`
+- `priority`: integer `0` through `4`, where `0` is highest
+- `assignee`
+- `claimed_at`
+- `dependencies`
+
+Task dependencies are local workflow metadata. Blocking dependency types affect
+`aiwiki task ready`; non-blocking dependency types are graph/context hints.
+
+Supported task dependency types:
+
+- `blocks`
+- `parent_child`
+- `related`
+- `discovered_from`
+
 Supported task statuses:
 
+- `open`
 - `in_progress`
+- `blocked`
+- `deferred`
 - `done`
 - `paused`
 - `cancelled`
@@ -377,6 +398,11 @@ Supported checkpoint event types:
 - `checkpoint`
 - `decision`
 - `blocker`
+- `task_created`
+- `task_claimed`
+- `dependency_added`
+- `task_discovered`
+- `task_closed`
 
 Optional fields:
 
@@ -388,6 +414,11 @@ Optional fields:
 - `files`
 - `module`
 - `severity`
+- `actor`
+- `task_id`
+- `dependency_id`
+- `dependency_type`
+- `from`
 
 Task event readers MUST reject corrupt JSONL with a clear error that includes the task ID and line
 number.
@@ -427,6 +458,37 @@ Behavior:
 - MUST NOT overwrite existing user files by default.
 - `--force` MAY refresh AIWiki-managed templates that are declared forceable.
 - `--force` MUST NOT delete extra user files.
+
+### 6.1a `aiwiki prime`
+
+Usage:
+
+```bash
+aiwiki prime [--limit <n>] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST produce a compact read-only startup dashboard for Codex.
+- MUST include active task information when present.
+- MUST include ready unblocked open tasks.
+- MUST include AIWiki memory health summary derived from doctor checks.
+- MUST include a short next-action list with runnable commands.
+- MUST NOT write files.
+
+### 6.1b `aiwiki schema`
+
+Usage:
+
+```bash
+aiwiki schema [all|task|task-event|prime] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST expose stable machine-readable schemas for agent-facing data surfaces.
+- MUST support schemas for task metadata, task events, and prime context.
+- Markdown output MAY summarize available schemas; JSON output MUST include the schema objects.
 
 ### 6.2 `aiwiki search`
 
@@ -524,12 +586,25 @@ Behavior:
 - `--architecture-guard` SHOULD flag route/controller boundary risk, high-risk path signals, and
   focused test areas for state transitions, webhooks, auth, migrations, and billing when relevant.
 - `--architecture-guard` MUST NOT automatically refactor code or block the user's task.
+- Built-in semantic change-risk rules SHOULD prioritize Python, Java, TypeScript,
+  JavaScript, and C projects without hard-coding a single repository's paths.
+- Built-in semantic change-risk rules SHOULD report general risk categories such
+  as dependency/build contracts, web/API boundaries, database migrations, frontend
+  hydration/runtime boundaries, Java transaction or concurrency paths, and C API
+  or memory-safety surfaces when file paths and content provide evidence.
+- `codex --team` SHOULD use dirty git files first, then matched brief targets, and
+  then representative semantic-risk files so cold-start repositories still offer
+  useful `guard` targets.
 - MUST sort high-severity memory before lower-severity memory.
 - MUST include sections for:
+  - Do Not
   - Related Modules
   - Critical Rules
   - Known Pitfalls
+  - Staleness Warnings
   - Required Checks
+  - Change Risks
+  - File Signals
   - Related Decisions
   - Graphify Structural Context when `--with-graphify` is provided
   - Architecture Guard when `--architecture-guard` is provided
@@ -572,6 +647,7 @@ Behavior:
 - MUST generate a preview only.
 - MUST NOT write structured wiki pages.
 - MUST read git diff only when `--from-git-diff` is provided.
+- MUST include untracked project files from `git status` when `--from-git-diff` is provided.
 - MUST read notes only from a project-local path.
 - MUST extract changed files from git diff.
 - MUST search memory using changed files and note text.
@@ -580,14 +656,20 @@ Behavior:
   - New Lessons
   - Pitfalls to Add or Update
   - Modules to Update
+  - Freshness Refreshes
   - Decisions to Add or Deprecate
   - Patterns to Add or Update
   - Rules to Promote
   - Files Changed in `.aiwiki`
   - Safety
 - MUST generate an `updatePlanDraft` when reusable wiki updates can be inferred.
+- SHOULD extract concrete reusable lessons from changed files when safe local heuristics can infer
+  them, including work graph behavior, structured JSON errors, and semantic risk lessons.
+- SHOULD suggest append refresh entries for wiki pages whose `files` frontmatter references changed
+  files.
 - `--output-plan` MUST write the update plan draft to a project-local JSON file.
 - `--output-plan` MUST NOT overwrite an existing file unless `--force` is provided.
+- `--output-plan` MUST reject paths outside the project root.
 - MUST append reflect eval data to `.aiwiki/evals/reflect-cases.jsonl` unless `--read-only` is
   provided.
 - `--read-only` MUST NOT write eval cases or output plan files.
@@ -753,7 +835,10 @@ Behavior:
 Usage:
 
 ```bash
-aiwiki task start "<task>" [--id <id>] [--prd <path>] [--format markdown|json]
+aiwiki task start "<task>" [--id <id>] [--prd <path>]
+                  [--type task|bug|feature|epic|chore]
+                  [--priority 0-4] [--actor <actor>]
+                  [--format markdown|json]
 ```
 
 Behavior:
@@ -772,8 +857,93 @@ Behavior:
   - `resume.md`
   - `metadata.json`
 - MUST set active task pointer.
+- MUST set status to `in_progress`.
+- MUST record assignee/claim metadata when an actor is available.
 - MUST reject duplicate task IDs.
 - MUST append a log entry.
+
+### 6.14a `aiwiki task create`
+
+Usage:
+
+```bash
+aiwiki task create "<task>" [--id <id>] [--prd <path>]
+                   [--type task|bug|feature|epic|chore]
+                   [--priority 0-4] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST create the same task file structure as `task start`.
+- MUST set status to `open`.
+- MUST NOT set the active task pointer.
+- MUST reject duplicate task IDs.
+
+### 6.14b `aiwiki task ready`
+
+Usage:
+
+```bash
+aiwiki task ready [--limit <n>] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST list `open` tasks with no unfinished `blocks` or `parent_child` dependencies.
+- MUST sort ready tasks by priority, then updated time.
+- MUST include active task ID when present.
+- MUST NOT treat `related` or `discovered_from` links as blockers.
+
+### 6.14c `aiwiki task claim`
+
+Usage:
+
+```bash
+aiwiki task claim [id] [--actor <actor>] [--force] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST set the selected task to `in_progress`.
+- MUST set active task pointer to the claimed task.
+- MUST record assignee and claimed timestamp.
+- MUST treat claims as coordination hints, not locks.
+- MUST reject claiming closed tasks.
+- MUST reject blocked tasks unless `--force` is provided.
+
+### 6.14d `aiwiki task discover`
+
+Usage:
+
+```bash
+aiwiki task discover "<task>" [--id <id>] [--from <id>]
+                     [--type task|bug|feature|epic|chore]
+                     [--priority 0-4] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST create an `open` task for work discovered during another task.
+- MUST add a `discovered_from` dependency to the provided or active source task when available.
+- MUST NOT make discovered work block the source task.
+
+### 6.14e `aiwiki task dep add`
+
+Usage:
+
+```bash
+aiwiki task dep add <task> <dependency>
+                   [--type blocks|parent_child|related|discovered_from]
+                   [--format markdown|json]
+```
+
+Behavior:
+
+- MUST add a typed dependency to task metadata.
+- MUST reject missing task IDs.
+- MUST reject self-dependencies.
+- MUST reject cycles for blocking dependency types.
+- MUST allow non-blocking knowledge links via `related` and `discovered_from`.
 
 ### 6.15 `aiwiki task list`
 
@@ -817,7 +987,7 @@ aiwiki task close [--status done|paused|cancelled] [--format markdown|json]
 Behavior:
 
 - MUST close the active task.
-- MUST reject `in_progress` as a close status.
+- MUST reject `open`, `in_progress`, `blocked`, and `deferred` as close statuses.
 - MUST update metadata and closed timestamp.
 - MUST clear active task pointer.
 - MUST append a log entry.
@@ -891,6 +1061,26 @@ Behavior:
 - MUST update `blockers.md` and resume content as derived summaries from `checkpoints.jsonl`.
 - MUST NOT immediately promote the blocker into long-term wiki memory.
 
+### 6.22 `aiwiki eval large-repos`
+
+Usage:
+
+```bash
+aiwiki eval large-repos [--cache-dir <path>] [--fixture <name...>] [--skip-clone]
+                         [--format markdown|json]
+```
+
+Behavior:
+
+- MUST run as a maintainer smoke eval, not as part of the normal project memory workflow.
+- MUST sparse-checkout repeatable large open-source repository fixtures into a cache directory.
+- MUST support fixture filtering by name.
+- MUST support `--skip-clone` so CI or local runs can require pre-existing cached checkouts.
+- MUST run `prime`, `codex --team`, and representative `guard` checks against each fixture.
+- MUST fail the command with a non-zero exit code when expected language risk signals disappear.
+- SHOULD include Python, Java, TypeScript, JavaScript, and C fixtures.
+- MUST NOT write `.aiwiki/` memory into the evaluated repository fixtures.
+
 ## 7. Output Contract
 
 ### 7.1 Markdown Output
@@ -911,6 +1101,9 @@ JSON output SHOULD preserve the same core data as Markdown output.
 Errors MUST be clear and actionable.
 
 CLI errors MUST be written to stderr and exit with a non-zero code.
+
+When the command invocation requests JSON output, CLI errors SHOULD be emitted as structured JSON
+with a stable code, actionable message, optional hint, and retryable flag.
 
 Commander parse errors MAY use Commander exit codes.
 

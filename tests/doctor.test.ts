@@ -22,6 +22,20 @@ async function writeProjectFile(rootDir: string, relativePath: string, content: 
 }
 
 describe("doctorWiki", () => {
+  it("returns cold-start health guidance before AIWiki is initialized", async () => {
+    const rootDir = await tempProject();
+
+    const result = await doctorWiki(rootDir);
+
+    expect(result.report.summary.pagesChecked).toBe(0);
+    expect(result.report.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "not_initialized" })
+      ])
+    );
+    expect(result.markdown).toContain("aiwiki init --project-name");
+  });
+
   it("summarizes memory health, stale pages, statuses, and promotion candidates", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -64,6 +78,14 @@ describe("doctorWiki", () => {
     expect(result.markdown).toContain("stale_referenced_file");
     expect(result.markdown).toContain("rule_promotion_candidate");
     expect(result.markdown).toContain("Review proposed or uncertain pages");
+    const staleFindings = result.report.findings.filter(
+      (finding) =>
+        finding.code === "stale_referenced_file" &&
+        finding.path === "wiki/modules/search.md"
+    );
+    expect(staleFindings).toHaveLength(1);
+    expect(staleFindings[0]?.message).toContain("1 stale");
+    expect(staleFindings[0]?.message).toContain("src/search.ts");
     expect(result.report.summary.staleWarnings).toBeGreaterThanOrEqual(1);
     expect(result.report.summary.rulePromotionCandidates).toBe(1);
     expect(result.report.summary.uncertainPages).toBe(1);

@@ -29,6 +29,18 @@ async function addCodexMemory(rootDir: string): Promise<void> {
   );
 }
 
+async function initGitProject(rootDir: string): Promise<void> {
+  await execFileAsync("git", ["init"], { cwd: rootDir });
+  await execFileAsync("git", ["config", "user.email", "test@example.com"], {
+    cwd: rootDir
+  });
+  await execFileAsync("git", ["config", "user.name", "Test User"], {
+    cwd: rootDir
+  });
+  await execFileAsync("git", ["add", "."], { cwd: rootDir });
+  await execFileAsync("git", ["commit", "-m", "baseline"], { cwd: rootDir });
+}
+
 describe("generateCodexRunbook", () => {
   it("generates a no-write Codex maintenance runbook", async () => {
     const rootDir = await tempProject();
@@ -50,7 +62,9 @@ describe("generateCodexRunbook", () => {
 
     expect(result.markdown).toContain("# Codex AIWiki Runbook");
     expect(result.markdown).toContain("The user only needs to describe the requirement");
+    expect(parsed.commands.start).toContain("aiwiki prime");
     expect(parsed.commands.start).toContain('aiwiki agent "improve search memory"');
+    expect(result.markdown).toContain("Use `aiwiki task ready`");
     expect(parsed.guardTargets).toContain("src/search.ts");
     expect(parsed.commands.afterEditing).toContain("aiwiki reflect --from-git-diff --read-only");
     expect(parsed.commands.afterEditing).toContain("aiwiki doctor");
@@ -84,6 +98,8 @@ describe("generateCodexRunbook", () => {
     expect(result.markdown).toContain("## Team Mode");
     expect(result.markdown).toContain("AIWiki does not create or manage agents");
     expect(result.markdown).toContain("## Implementer Agent");
+    expect(result.markdown).toContain("aiwiki task ready --format json");
+    expect(result.markdown).toContain("blocked tasks require explicit `--force`");
     expect(result.markdown).toContain("## Reviewer Agent");
     expect(result.markdown).toContain("## Memory Steward Agent");
     expect(result.markdown).toContain("## Handoff Rules");
@@ -95,6 +111,66 @@ describe("generateCodexRunbook", () => {
     ]);
     expect(parsed.team?.roles.flatMap((role) => role.mustNot).join("\n")).toContain(
       "without user approval"
+    );
+  });
+
+  it("prioritizes dirty git files as guard targets", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addCodexMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "layout.tsx"), "export const layout = true;\n", "utf8");
+    await initGitProject(rootDir);
+    await writeFile(path.join(rootDir, "src", "layout.tsx"), "export const layout = false;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "new-widget.tsx"), "export const widget = true;\n", "utf8");
+
+    const result = await generateCodexRunbook(rootDir, "评估当前项目改动", {
+      team: true
+    });
+
+    expect(result.runbook.guardTargets.slice(0, 2)).toEqual([
+      "src/layout.tsx",
+      "src/new-widget.tsx"
+    ]);
+    expect(result.markdown).toContain("aiwiki guard src/layout.tsx");
+    expect(result.markdown).toContain("aiwiki guard src/new-widget.tsx");
+  });
+
+  it("keeps cold-start team runbooks on commands that can run before init", async () => {
+    const rootDir = await tempProject();
+    await writeFile(path.join(rootDir, "README.md"), "# Demo\n", "utf8");
+    await initGitProject(rootDir);
+    await writeFile(path.join(rootDir, "README.md"), "# Demo\n\nUpdated.\n", "utf8");
+
+    const result = await generateCodexRunbook(rootDir, "评估当前项目改动", {
+      team: true
+    });
+
+    expect(result.runbook.initialized).toBe(false);
+    expect(result.runbook.commands.afterEditing).not.toContain("aiwiki lint");
+    expect(result.runbook.commands.memoryReview.join("\n")).toContain("output plans require initialized AIWiki memory");
+    expect(result.markdown).toContain("Task graph commands require initialized AIWiki memory");
+    expect(result.markdown).not.toContain("Use `aiwiki task ready`");
+    expect(result.markdown).toContain("aiwiki guard README.md");
+  });
+
+  it("falls back to representative language guard targets in cold-start projects", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "include", "project"), { recursive: true });
+    await mkdir(path.join(rootDir, "lib"), { recursive: true });
+    await writeFile(path.join(rootDir, "Makefile"), "all:\n\tcc lib/memdebug.c\n", "utf8");
+    await writeFile(path.join(rootDir, "include", "project", "api.h"), "void copy(char *dst, char *src);\n", "utf8");
+    await writeFile(path.join(rootDir, "lib", "memdebug.c"), "void *p = malloc(10);\n", "utf8");
+    await initGitProject(rootDir);
+
+    const result = await generateCodexRunbook(rootDir, "assess representative code change", {
+      team: true
+    });
+
+    expect(result.runbook.initialized).toBe(false);
+    expect(result.runbook.guardTargets).toEqual(
+      expect.arrayContaining(["include/project/api.h", "lib/memdebug.c"])
     );
   });
 

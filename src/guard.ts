@@ -15,6 +15,7 @@ import {
 } from "./ignore.js";
 import type { IgnoreRule } from "./ignore.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { semanticChangeRiskMessages } from "./risk-rules.js";
 import { searchWikiMemory } from "./search.js";
 import {
   collectWikiStalenessWarnings,
@@ -49,6 +50,7 @@ export interface FileGuardrails {
     importedBy: string[];
     imports: string[];
   };
+  changeRisks: string[];
   stalenessWarnings?: WikiStalenessWarning[];
   sections: FileGuardrailSection[];
 }
@@ -60,6 +62,28 @@ export interface FileGuardrailsResult {
 }
 
 const DEFAULT_GUARD_LIMIT = 10;
+const MIN_GUARD_SEARCH_SCORE = 6;
+const LOW_SIGNAL_PATH_TOKENS = new Set([
+  "src",
+  "app",
+  "api",
+  "lib",
+  "server",
+  "client",
+  "components",
+  "pages",
+  "index",
+  "route",
+  "page",
+  "file",
+  "files",
+  "missing",
+  "unknown",
+  "new",
+  "temp",
+  "tmp",
+  "definitely"
+]);
 
 const SEVERITY_RANK: Record<RiskLevel, number> = {
   low: 1,
@@ -303,22 +327,9 @@ function fallback(items: string[], value: string): string[] {
 
 function pathSearchQuery(filePath: string): string {
   const parsed = path.posix.parse(filePath);
-  const lowSignalTokens = new Set([
-    "src",
-    "app",
-    "api",
-    "lib",
-    "server",
-    "client",
-    "components",
-    "pages",
-    "index",
-    "route",
-    "page"
-  ]);
   const tokens = [parsed.name, ...filePath.split(/[/.\\_-]+/u)]
     .map((token) => token.trim().toLowerCase())
-    .filter((token) => token.length > 3 && !lowSignalTokens.has(token));
+    .filter((token) => token.length > 3 && !LOW_SIGNAL_PATH_TOKENS.has(token));
 
   return unique(tokens).join(" ");
 }
@@ -393,6 +404,22 @@ function fileSignalItems(signals: FileGuardrails["fileSignals"]): string[] {
   ].filter((item): item is string => Boolean(item));
 }
 
+function matchingProjectFiles(files: string[], candidates: string[]): string[] {
+  return candidates.filter((candidate) => files.includes(candidate));
+}
+
+async function readOptionalFile(rootDir: string, filePath: string): Promise<string> {
+  try {
+    return await fileContent(rootDir, filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+
+    throw error;
+  }
+}
+
 function shouldRecommendFileNote(filePath: string, pages: WikiPage[], signals: FileGuardrails["fileSignals"]): boolean {
   if (pages.length > 0) {
     return false;
@@ -454,6 +481,9 @@ function architectureGuardItems(
   const testHints = [
     matchedRiskKeywords.some((keyword) => ["webhook", "payment", "billing", "stripe"].includes(keyword))
       ? "webhooks, billing/payment state transitions, and idempotency"
+      : undefined,
+    matchedRiskKeywords.some((keyword) => ["checkout", "charge", "amount", "invoice", "subscription"].includes(keyword))
+      ? "checkout, charge/amount handling, currency math, and idempotency"
       : undefined,
     matchedRiskKeywords.some((keyword) => ["auth", "permission", "rbac", "role", "security"].includes(keyword))
       ? "auth, permission, and security boundaries"
@@ -523,6 +553,7 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
     "No matching decision pages found."
   );
   const fileSignals = sectionItems(guardrails, "File Signals");
+  const changeRisks = sectionItems(guardrails, "Change Risks");
   const relatedFiles = withoutFallback(
     sectionItems(guardrails, "Related Files"),
     "No related implementation files detected."
@@ -564,6 +595,10 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
     {
       title: "Required Checks",
       items: stableItems(sectionItems(guardrails, "Required Checks"), "Run relevant project checks after editing.")
+    },
+    {
+      title: "Change Risks",
+      items: stableItems(changeRisks, "No semantic change risks detected from path or file content.")
     },
     {
       title: "Suggested Tests",
@@ -643,7 +678,7 @@ export async function generateFileGuardrails(
   for (const page of exactPages) {
     pagesByPath.set(pageKey(page), page);
   }
-  for (const result of search.results) {
+  for (const result of search.results.filter((item) => item.score >= MIN_GUARD_SEARCH_SCORE)) {
     pagesByPath.set(pageKey(result.page), result.page);
   }
 
@@ -657,6 +692,11 @@ export async function generateFileGuardrails(
   const detectedTests = likelyTestFiles(normalizedFile, projectFiles);
   const signals = await fileSignals(rootDir, normalizedFile, projectFiles);
   const relatedFiles = relatedImplementationFiles(normalizedFile, pages, signals.imports);
+  const changeRisks = semanticChangeRiskMessages({
+    filePath: normalizedFile,
+    content: signals.exists ? await readOptionalFile(rootDir, normalizedFile) : "",
+    files: projectFiles
+  });
   const testSuggestions = suggestedTests(normalizedFile, pages, detectedTests);
   const fileNoteRecommended = shouldRecommendFileNote(normalizedFile, pages, signals);
   const graphify = options.withGraphify
@@ -671,6 +711,7 @@ export async function generateFileGuardrails(
     suggestedTests: testSuggestions,
     relatedFiles,
     fileSignals: signals,
+    changeRisks,
     stalenessWarnings,
     sections: [
       ...(!initialized
@@ -699,6 +740,10 @@ export async function generateFileGuardrails(
       {
         title: "Required Checks",
         items: requiredChecks(normalizedFile, pages)
+      },
+      {
+        title: "Change Risks",
+        items: fallback(changeRisks, "No semantic change risks detected from path or file content.")
       },
       {
         title: "File Signals",

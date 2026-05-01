@@ -6,10 +6,15 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { initAIWiki } from "../src/init.js";
 import {
+  addTaskDependency,
   checkpointTask,
+  claimTask,
   closeTask,
+  createTask,
+  discoverTask,
   getTaskStatus,
   listTasks,
+  readyTasks,
   recordTaskBlocker,
   recordTaskDecision,
   resumeTask,
@@ -103,6 +108,19 @@ describe("AIWiki task continuity", () => {
     );
     expect(resume.markdown).toContain("Finished task start");
     expect(resume.markdown).toContain("Implement resume");
+  });
+
+  it("keeps task status compact instead of embedding derived markdown files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Compact status", { id: "compact-status" });
+
+    const status = await getTaskStatus(rootDir);
+
+    expect(status.markdown).toContain("## Progress");
+    expect(status.markdown).toContain("## Checkpoints");
+    expect(status.markdown).not.toContain("\n# Progress");
+    expect(status.markdown).not.toContain("\n# Decisions");
   });
 
   it("writes resume files by default", async () => {
@@ -319,6 +337,125 @@ describe("AIWiki task continuity", () => {
     expect(resume.markdown).toContain("event test passed");
     expect(resume.markdown).toContain("continue from event log");
     expect(resume.markdown).not.toContain("User edited stale");
+  });
+
+  it("tracks open ready work, blocking dependencies, and claims", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    await createTask(rootDir, "Set up schema", {
+      id: "schema-task",
+      type: "task",
+      priority: 1
+    });
+    await createTask(rootDir, "Implement auth", {
+      id: "auth-task",
+      type: "feature",
+      priority: 0
+    });
+    await addTaskDependency(rootDir, "auth-task", "schema-task");
+
+    const readyBefore = await readyTasks(rootDir);
+    expect(readyBefore.data.tasks.map((item) => item.metadata.id)).toEqual([
+      "schema-task"
+    ]);
+    expect(readyBefore.markdown).toContain("schema-task | Set up schema | P1");
+    await expect(
+      claimTask(rootDir, "auth-task", { actor: "reviewer" })
+    ).rejects.toThrow("blocked by unfinished dependencies");
+
+    await claimTask(rootDir, "schema-task", { actor: "codex-test" });
+    await closeTask(rootDir, { status: "done" });
+
+    const readyAfter = await readyTasks(rootDir);
+    expect(readyAfter.data.tasks.map((item) => item.metadata.id)).toEqual([
+      "auth-task"
+    ]);
+
+    const claimed = await claimTask(rootDir, "auth-task", { actor: "reviewer" });
+    expect(claimed.data.status).toBe("in_progress");
+    expect(claimed.data.assignee).toBe("reviewer");
+    expect(
+      await readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")
+    ).toBe("auth-task");
+  });
+
+  it("allows unique short task ids for claim, status, and dependencies", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    const schema = await createTask(rootDir, "Set up schema", {
+      type: "task",
+      priority: 1
+    });
+    const auth = await createTask(rootDir, "Implement auth", {
+      type: "feature",
+      priority: 0
+    });
+
+    await addTaskDependency(rootDir, "implement-auth", "set-up-schema");
+    await claimTask(rootDir, "set-up-schema", { actor: "codex-test" });
+
+    const status = await getTaskStatus(rootDir, "set-up-schema");
+    expect(status.data.metadata.id).toBe(schema.data.id);
+    expect(
+      await readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")
+    ).toBe(schema.data.id);
+
+    const authStatus = await getTaskStatus(rootDir, auth.data.id);
+    expect(authStatus.data.metadata.dependencies?.[0]?.id).toBe(schema.data.id);
+  });
+
+  it("rejects ambiguous short task ids", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await createTask(rootDir, "Implement auth", { id: "2026-05-01-implement-auth" });
+    await createTask(rootDir, "Retry auth", { id: "2026-05-02-implement-auth" });
+
+    await expect(claimTask(rootDir, "implement-auth")).rejects.toThrow(
+      "Task reference is ambiguous"
+    );
+  });
+
+  it("records discovered work as an open non-blocking task", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Current implementation", { id: "current-task" });
+
+    const discovered = await discoverTask(rootDir, "Reflect output is too broad", {
+      id: "reflect-broad",
+      priority: 2,
+      type: "bug"
+    });
+
+    expect(discovered.data.status).toBe("open");
+    expect(discovered.data.dependencies?.[0]).toMatchObject({
+      id: "current-task",
+      type: "discovered_from"
+    });
+    const ready = await readyTasks(rootDir);
+    expect(ready.data.tasks.map((item) => item.metadata.id)).toContain("reflect-broad");
+
+    const taskMarkdown = await readFile(
+      path.join(rootDir, ".aiwiki", "tasks", "reflect-broad", "task.md"),
+      "utf8"
+    );
+    expect(taskMarkdown).toContain("current-task (discovered_from)");
+  });
+
+  it("rejects dependency cycles", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await createTask(rootDir, "Task A", { id: "task-a" });
+    await createTask(rootDir, "Task B", { id: "task-b" });
+    await addTaskDependency(rootDir, "task-b", "task-a");
+
+    await expect(addTaskDependency(rootDir, "task-a", "task-b")).rejects.toThrow(
+      "would create a cycle"
+    );
+    await expect(addTaskDependency(rootDir, "task-a", "task-a")).rejects.toThrow(
+      "cannot depend on itself"
+    );
   });
 
   it("reports corrupt task event logs with task id and line number", async () => {

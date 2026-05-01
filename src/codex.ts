@@ -1,6 +1,14 @@
+import { execFile } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
+import { promisify } from "node:util";
 import { generateAgentContext } from "./agent.js";
 import type { AgentContextOptions } from "./agent.js";
+import { AIWikiNotInitializedError, loadAIWikiConfig } from "./config.js";
 import type { OutputFormat } from "./output.js";
+import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { representativeRiskFiles, semanticChangeRiskMessages } from "./risk-rules.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface CodexRunbookOptions extends AgentContextOptions {
   format?: OutputFormat;
@@ -24,6 +32,7 @@ export interface CodexTeamRunbook {
 export interface CodexRunbook {
   task: string;
   projectName: string;
+  initialized: boolean;
   guardTargets: string[];
   team?: CodexTeamRunbook;
   commands: {
@@ -97,6 +106,100 @@ function formatTeamSection(team: CodexTeamRunbook): string[] {
   return sections;
 }
 
+function normalizeChangedFile(filePath: string): string {
+  return toPosixPath(filePath).replace(/^\.\//u, "");
+}
+
+function unique(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function statusFile(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const renamed = /^R\s+(.+?)\s+->\s+(.+)$/u.exec(trimmed);
+  if (renamed) {
+    return renamed[2];
+  }
+
+  const match = /^(?:[ MADRCU?!]{2})\s+(.+)$/u.exec(line);
+  return match?.[1];
+}
+
+async function changedFilesFromGitStatus(rootDir: string): Promise<string[]> {
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync("git", ["status", "--short"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    }));
+  } catch {
+    return [];
+  }
+
+  const files = unique(
+    stdout
+      .split("\n")
+      .map(statusFile)
+      .map((file) => file ? normalizeChangedFile(file) : undefined)
+  );
+  const existingFiles: string[] = [];
+  for (const file of files) {
+    try {
+      const fileStat = await stat(resolveProjectPath(rootDir, file));
+      if (fileStat.isFile()) {
+        existingFiles.push(file);
+      }
+    } catch {
+      // Deleted files and ignored paths do not need file guardrails.
+    }
+  }
+
+  return existingFiles;
+}
+
+async function trackedFilesFromGit(rootDir: string): Promise<string[]> {
+  let stdout = "";
+  try {
+    ({ stdout } = await execFileAsync("git", ["ls-files"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    }));
+  } catch {
+    return [];
+  }
+
+  return unique(
+    stdout
+      .split("\n")
+      .map((file) => file.trim())
+      .filter((file) => file.length > 0)
+      .map(normalizeChangedFile)
+  );
+}
+
+async function representativeGuardTargetsFromGit(rootDir: string): Promise<string[]> {
+  const files = await trackedFilesFromGit(rootDir);
+  const candidates = representativeRiskFiles(files, 80);
+  const riskyTargets: string[] = [];
+
+  for (const candidate of candidates) {
+    try {
+      const content = await readFile(resolveProjectPath(rootDir, candidate), "utf8");
+      if (semanticChangeRiskMessages({ filePath: candidate, content, files }).length > 0) {
+        riskyTargets.push(candidate);
+      }
+    } catch {
+      // Skip unreadable candidates; the path-only fallback below can still suggest safe next targets.
+    }
+  }
+
+  return unique([...riskyTargets, ...candidates]).slice(0, 5);
+}
+
 export function formatCodexRunbookMarkdown(runbook: CodexRunbook): string {
   const formattedSections = runbook.sections.flatMap((section) => {
     const output = [
@@ -120,7 +223,7 @@ function codexRunbookToJson(runbook: CodexRunbook): string {
   return `${JSON.stringify(runbook, null, 2)}\n`;
 }
 
-function createTeamRunbook(task: string): CodexTeamRunbook {
+function createTeamRunbook(task: string, initialized: boolean): CodexTeamRunbook {
   return {
     enabled: true,
     roles: [
@@ -128,6 +231,13 @@ function createTeamRunbook(task: string): CodexTeamRunbook {
         name: "Implementer",
         purpose: "Make the smallest safe code change with file-level guardrails.",
         commands: [
+          "Run `aiwiki prime`.",
+          initialized
+            ? "Run `aiwiki task ready --format json` and claim ready work when the user wants task-graph coordination."
+            : "If prime reports cold-start mode, skip task graph commands until after `aiwiki init` and `aiwiki map --write`.",
+          initialized
+            ? "Run `aiwiki task claim <id>` only for unblocked work unless the user explicitly approves `--force`."
+            : "Use cold-start `aiwiki agent` and `aiwiki guard` output instead of claiming tasks.",
           `Run \`aiwiki agent ${quote(task)}\`.`,
           "Run `aiwiki guard <file>` before editing.",
           "Make the smallest safe implementation.",
@@ -142,6 +252,10 @@ function createTeamRunbook(task: string): CodexTeamRunbook {
         name: "Reviewer",
         purpose: "Review changed files, risk signals, and memory health.",
         commands: [
+          "Run `aiwiki prime`.",
+          initialized
+            ? "Check `aiwiki task status <id>` for claimed work."
+            : "If AIWiki is not initialized, treat doctor output as setup guidance rather than memory health.",
           "Review changed files.",
           "Run `aiwiki guard <changed-file>`.",
           "Run `aiwiki doctor`.",
@@ -157,8 +271,12 @@ function createTeamRunbook(task: string): CodexTeamRunbook {
         purpose: "Convert useful finished-work lessons into reviewed candidate memory.",
         commands: [
           "Run `aiwiki reflect --from-git-diff --read-only`.",
-          "If useful, generate an output plan.",
-          "Preview with `aiwiki apply <plan>`."
+          initialized
+            ? "If useful, generate an output plan."
+            : "If AIWiki is not initialized, report candidate lessons but do not generate an output plan yet.",
+          initialized
+            ? "Preview with `aiwiki apply <plan>`."
+            : "Initialize AIWiki before previewing durable memory writes."
         ],
         mustNot: [
           "run `aiwiki apply <plan> --confirm` without user approval"
@@ -166,6 +284,19 @@ function createTeamRunbook(task: string): CodexTeamRunbook {
       }
     ]
   };
+}
+
+async function isAIWikiInitialized(rootDir: string): Promise<boolean> {
+  try {
+    await loadAIWikiConfig(rootDir);
+    return true;
+  } catch (error) {
+    if (error instanceof AIWikiNotInitializedError) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 export async function generateCodexRunbook(
@@ -179,9 +310,17 @@ export async function generateCodexRunbook(
     architectureGuard: options.architectureGuard,
     format: options.format
   });
-  const guardTargets = agent.context.guardTargets.slice(0, 3);
+  const initialized = await isAIWikiInitialized(rootDir);
+  const dirtyGuardTargets = await changedFilesFromGitStatus(rootDir);
+  const representativeGuardTargets = await representativeGuardTargetsFromGit(rootDir);
+  const guardTargets = unique([
+    ...dirtyGuardTargets,
+    ...agent.context.guardTargets,
+    ...representativeGuardTargets
+  ]).slice(0, 5);
   const planPath = `.aiwiki/context-packs/${taskSlug(task)}-reflect-plan.json`;
   const start = [
+    "aiwiki prime",
     `aiwiki agent ${quote(task)}`,
     guardTargets.length > 0
       ? `aiwiki guard ${guardTargets[0]}`
@@ -192,18 +331,25 @@ export async function generateCodexRunbook(
     "Run the focused project tests for changed behavior.",
     "aiwiki reflect --from-git-diff --read-only",
     "aiwiki doctor",
-    "aiwiki lint"
+    initialized ? "aiwiki lint" : undefined
+  ].filter((item): item is string => Boolean(item));
+  const memoryReview = initialized
+    ? [
+        `If reflect reports useful candidate memory, run: aiwiki reflect --from-git-diff --output-plan ${planPath}`,
+        `Preview it with: aiwiki apply ${planPath}`,
+        "Do not run apply --confirm unless the user explicitly approves the candidate memory."
+      ]
+    : [
+        "Reflect can summarize changed files in cold-start mode, but output plans require initialized AIWiki memory.",
+        "Run `aiwiki init --project-name <name>` and `aiwiki map --write` before creating durable memory update plans.",
+        "Do not run apply --confirm unless the user explicitly approves the candidate memory."
   ];
-  const memoryReview = [
-    `If reflect reports useful candidate memory, run: aiwiki reflect --from-git-diff --output-plan ${planPath}`,
-    `Preview it with: aiwiki apply ${planPath}`,
-    "Do not run apply --confirm unless the user explicitly approves the candidate memory."
-  ];
-  const team = options.team ? createTeamRunbook(task) : undefined;
+  const team = options.team ? createTeamRunbook(task, initialized) : undefined;
 
   const runbook: CodexRunbook = {
     task,
     projectName: agent.context.projectName,
+    initialized,
     guardTargets,
     team,
     commands: {
@@ -224,6 +370,20 @@ export async function generateCodexRunbook(
       {
         title: "Start",
         items: start
+      },
+      {
+        title: "Work Graph",
+        items: initialized
+          ? [
+              "Use `aiwiki task ready` to see unblocked open work.",
+              "Use `aiwiki task claim <id>` to claim ready work; blocked tasks require explicit `--force`.",
+              "Use `aiwiki task discover \"<follow-up>\"` for new work found mid-task instead of burying it in chat."
+            ]
+          : [
+              "Task graph commands require initialized AIWiki memory.",
+              "Use `aiwiki prime`, `agent`, `brief --read-only`, `guard`, `reflect --read-only`, and `doctor` during cold-start.",
+              "Initialize with `aiwiki init --project-name <name>` and `aiwiki map --write` before creating or claiming tasks."
+            ]
       },
       {
         title: "Before Editing",
