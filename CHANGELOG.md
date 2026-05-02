@@ -3,6 +3,27 @@
 This file summarizes the implementation history that used to live in root-level
 `implementation-m*.md` files. Full milestone notes are archived under `docs/archive/`.
 
+## 2026-05-02
+
+### npm Release
+
+- Published the first public npm package as `@superwoererte/aiwiki@0.1.0`.
+- Kept the installed CLI binary as `aiwiki` even though the npm package is
+  scoped.
+- Documented that the unscoped `aiwiki` package name is blocked by npm because
+  it is too similar to the existing `ai-wiki` package.
+- Added MIT licensing and finalized package metadata for public distribution.
+- Verified registry installation from a clean directory with
+  `npm install @superwoererte/aiwiki@latest`, `npx aiwiki --version`,
+  `npx aiwiki init --project-name registry-smoke`, and
+  `npx aiwiki index build`.
+- Kept SQLite indexing as a core feature through `better-sqlite3`; the
+  `prebuild-install` deprecation warning is expected during installation and is
+  non-blocking when the install and SQLite smoke test pass.
+- Updated release smoke CI so scoped package tarballs such as
+  `superwoererte-aiwiki-0.1.0.tgz` install correctly on macOS, Windows, and
+  Linux across Node.js 20, 22, and 24.
+
 ## 2026-05-01
 
 ### Codex Work Graph

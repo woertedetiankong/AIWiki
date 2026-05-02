@@ -3,6 +3,16 @@
 AIWiki is distributed as a Node.js CLI package. The package includes the compiled
 `dist/` files and exposes the `aiwiki` binary.
 
+## Current Registry Package
+
+- Public package: `@superwoererte/aiwiki`
+- Installed binary: `aiwiki`
+- First published version: `0.1.0` on 2026-05-02
+
+The unscoped `aiwiki` package name is not used because npm blocks it as too
+similar to the existing `ai-wiki` package. Keep package installation examples
+scoped, but keep command examples as `aiwiki`.
+
 ## Supported Runtime
 
 - Node.js `20.x`, `22.x`, or `24.x`.
@@ -13,6 +23,10 @@ AIWiki is distributed as a Node.js CLI package. The package includes the compile
 workflow installs AIWiki from the packed tarball on macOS, Windows, and Linux
 across the supported Node.js versions, then runs `aiwiki index build` so SQLite
 support is verified before release.
+
+npm may print a `prebuild-install` deprecation warning while installing
+`better-sqlite3`. Treat that warning as non-blocking when the install completes,
+`aiwiki --version` works, and `aiwiki index build` succeeds.
 
 ## Pre-Release Checklist
 
@@ -53,7 +67,7 @@ npx aiwiki search smoke --index
 ## Publish a Beta
 
 ```bash
-npm login
+npm login --auth-type=web
 npm version prerelease --preid beta
 npm publish --tag beta --access public
 ```
@@ -67,7 +81,7 @@ npm install -g @superwoererte/aiwiki@beta
 ## Publish Stable
 
 ```bash
-npm login
+npm login --auth-type=web
 npm version patch
 npm publish --access public
 ```

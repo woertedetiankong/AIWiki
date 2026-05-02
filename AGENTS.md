@@ -16,6 +16,12 @@ Note: When reading UTF-8 files in PowerShell, use Get-Content -Encoding UTF8; th
 - Default to local-only behavior. Do not send code, diffs, notes, or wiki content to a remote provider unless the command and configuration make that explicit.
 - Keep Codex implementation plans separate from AIWiki development briefs. Briefs provide memory and constraints; they do not become step-by-step code-edit instructions.
 
+## Release Facts
+
+- The public npm package is `@superwoererte/aiwiki`; the installed binary stays `aiwiki`.
+- Do not switch docs or package metadata back to the unscoped `aiwiki` package name. npm blocks that name because it is too similar to `ai-wiki`.
+- SQLite indexing is a core feature and currently depends on `better-sqlite3`. A `prebuild-install` deprecation warning during install is acceptable when installation and `aiwiki index build` succeed.
+
 ## Architecture Rules
 
 - Keep product conventions centralized. Directory names, default files, default token budgets, default ignore lists, and version constants belong in `src/constants.ts` or a similarly focused module; ignore matching and `.gitignore` integration belong in `src/ignore.ts`.

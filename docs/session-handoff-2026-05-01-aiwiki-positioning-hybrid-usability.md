@@ -2,6 +2,11 @@
 
 Date: 2026-05-01
 
+Status update on 2026-05-02: the broader release-readiness work was merged to
+`main`, `.aiwiki/` was removed from Git tracking and kept local-only, and
+`@superwoererte/aiwiki@0.1.0` was published to npm. For the current release
+handoff, read `docs/session-handoff-2026-05-02-npm-release.md`.
+
 ## Why This Handoff Exists
 
 The conversation context is near full. The user plans to start a new Codex

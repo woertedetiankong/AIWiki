@@ -2,12 +2,25 @@
 
 Status: Working plan based on local dogfood feedback.
 Date: 2026-04-29
-Last reviewed: 2026-05-01
+Last reviewed: 2026-05-02
 
 This document turns recent AI coding-agent feedback into an implementation
 roadmap. It is intentionally narrower than `SPEC-FUTURE.md`: the goal is to make
 the current local CLI workflow useful every day before expanding into larger
 systems.
+
+## Release Baseline
+
+AIWiki is now published on npm as `@superwoererte/aiwiki@0.1.0`. The package is
+scoped because npm blocks the unscoped `aiwiki` name as too similar to
+`ai-wiki`; the installed binary remains `aiwiki`.
+
+The 2026-05-02 release smoke baseline passed for macOS, Windows, and Linux
+across Node.js 20, 22, and 24. Registry smoke also passed from a clean directory
+with `npm install @superwoererte/aiwiki@latest`, `npx aiwiki --version`,
+`npx aiwiki init --project-name registry-smoke`, and `npx aiwiki index build`.
+The remaining `prebuild-install` deprecation warning from `better-sqlite3` is
+accepted as non-blocking for now.
 
 ## Product Direction
 
