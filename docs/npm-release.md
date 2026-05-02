@@ -18,10 +18,9 @@ support is verified before release.
 
 Before publishing, confirm:
 
-- The package name is available to the npm account. If `aiwiki` cannot be
-  published because npm still reserves a previously unpublished name, publish a
-  scoped package such as `@woertedetiankong/aiwiki` while keeping the binary name
-  as `aiwiki`.
+- The npm package name is `@superwoererte/aiwiki`. The unscoped `aiwiki` name is
+  blocked by npm because it is too similar to the existing `ai-wiki` package.
+  Keep the binary name as `aiwiki`.
 - The project license has been chosen and added to `package.json` and a
   repository `LICENSE` file.
 - The release smoke GitHub Action is green.
@@ -44,7 +43,7 @@ npm pack --pack-destination /tmp/aiwiki-pack-smoke
 mkdir -p /tmp/aiwiki-install-smoke
 cd /tmp/aiwiki-install-smoke
 npm init -y
-npm install /tmp/aiwiki-pack-smoke/aiwiki-*.tgz
+npm install /tmp/aiwiki-pack-smoke/*.tgz
 npx aiwiki --version
 npx aiwiki init --project-name smoke
 npx aiwiki index build
@@ -62,7 +61,7 @@ npm publish --tag beta --access public
 Users can install the beta with:
 
 ```bash
-npm install -g aiwiki@beta
+npm install -g @superwoererte/aiwiki@beta
 ```
 
 ## Publish Stable
@@ -76,7 +75,7 @@ npm publish --access public
 Users can install the stable release with:
 
 ```bash
-npm install -g aiwiki
+npm install -g @superwoererte/aiwiki
 ```
 
 ## After Publishing
@@ -87,7 +86,7 @@ Verify the registry install from a clean directory:
 mkdir -p /tmp/aiwiki-registry-smoke
 cd /tmp/aiwiki-registry-smoke
 npm init -y
-npm install aiwiki@latest
+npm install @superwoererte/aiwiki@latest
 npx aiwiki --version
 npx aiwiki init --project-name registry-smoke
 npx aiwiki index build

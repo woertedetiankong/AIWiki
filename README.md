@@ -14,6 +14,18 @@ context, guard risky edits, and propose reviewed memory updates.
 
 Use Node.js 20, 22, or 24.
 
+For normal npm users:
+
+```bash
+npm install -g @superwoererte/aiwiki
+aiwiki <command>
+```
+
+The npm package is scoped as `@superwoererte/aiwiki`, but the installed CLI
+binary is still `aiwiki`.
+
+From a source checkout:
+
 ```bash
 npm install
 npm run build
@@ -44,7 +56,7 @@ cd D:\path\to\target-project
 & "D:\path\to\AIWiki\node_modules\.bin\tsx.cmd" "D:\path\to\AIWiki\src\cli.ts" brief "implement the next feature"
 ```
 
-After publishing or linking the package, the binary is:
+After installing or linking the package, the binary is:
 
 ```bash
 aiwiki <command>
