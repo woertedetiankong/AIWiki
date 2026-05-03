@@ -1,6 +1,6 @@
 {
   "name": "@superwoererte/aiwiki",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first AI coding memory and context engineering CLI.",
   "license": "MIT",
   "keywords": [
