@@ -1,4 +1,4 @@
-export const AIWIKI_VERSION = "0.1.1";
+export const AIWIKI_VERSION = "0.1.2";
 
 export const AIWIKI_DIR = ".aiwiki";
 export const CONFIG_PATH = `${AIWIKI_DIR}/config.json`;
