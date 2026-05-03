@@ -605,6 +605,21 @@ function mustReadFiles(results: SearchResult[], riskFiles: string[]): string[] {
   return unique([...wikiDocs, ...riskFiles, ...relatedFiles]);
 }
 
+function isHighConfidenceBriefResult(result: SearchResult): boolean {
+  const structuralMatch = result.matchedFields.some((field) =>
+    field === "title" || field === "frontmatter" || field === "path"
+  );
+  return structuralMatch && result.score >= 8;
+}
+
+function highConfidenceResults(results: SearchResult[]): SearchResult[] {
+  return results.filter(isHighConfidenceBriefResult);
+}
+
+function memoryHintResults(results: SearchResult[]): SearchResult[] {
+  return results.filter((result) => !isHighConfidenceBriefResult(result));
+}
+
 function memoryBullets(results: SearchResult[]): string[] {
   return results.map((result) => {
     const bits = [
@@ -616,6 +631,14 @@ function memoryBullets(results: SearchResult[]): string[] {
     ].filter(Boolean);
 
     return `${pageTitle(result)} (${pageDocPath(result)}; ${bits.join(", ")})`;
+  });
+}
+
+function memoryHintBullets(results: SearchResult[]): string[] {
+  return results.map((result) => {
+    const fields = result.matchedFields.join(", ");
+    const excerpt = result.excerpt ? ` - ${result.excerpt}` : "";
+    return `${pageTitle(result)} (${pageDocPath(result)}; score ${result.score}; matched ${fields})${excerpt}`;
   });
 }
 
@@ -701,6 +724,68 @@ function compactItems(items: string[], fallback: string): string[] {
   return items.length > 0 ? items : [fallback];
 }
 
+function memoryCoverageItems(
+  initialized: boolean,
+  selectedDocs: string[],
+  discoveredDocs: string[],
+  discoveredEntryFiles: string[]
+): string[] {
+  if (!initialized) {
+    return [
+      "No durable .aiwiki memory was loaded; this brief is based on a cold project scan.",
+      "Treat discovered files and docs as navigation hints, not learned project constraints."
+    ];
+  }
+
+  if (selectedDocs.length > 0) {
+    return [
+      `Retrieved ${selectedDocs.length} candidate AIWiki memory page(s).`,
+      "Retrieval is not proof that the target code area has memory coverage; only treat clearly target-matching pages as project-specific constraints.",
+      "Treat built-in generic guardrails as advisory checks.",
+      "Before editing concrete files, run `aiwiki guard <file>` to confirm file-level coverage."
+    ];
+  }
+
+  const discoveredHints = discoveredDocs.length + discoveredEntryFiles.length;
+  return [
+    "No task-specific AIWiki memory pages matched this request.",
+    discoveredHints > 0
+      ? "Discovered files and docs are search hints only; inspect them directly before planning edits."
+      : "No task-matching source files or docs were discovered; inspect the repository directly before planning edits.",
+    "Do not infer project-specific constraints from generic guardrails when memory coverage is empty."
+  ];
+}
+
+function recommendedDirectionItems(hasMatchedMemory: boolean): string[] {
+  return [
+    hasMatchedMemory
+      ? "Use only clearly relevant matched AIWiki pages as project memory and constraints."
+      : "No matching AIWiki pages were found; use source code, tests, and the user's request as the source of truth.",
+    "Keep the implementation plan inside the coding agent session; this brief should not be treated as exact edit instructions.",
+    "Prefer existing project conventions and local Markdown workflow before adding new infrastructure."
+  ];
+}
+
+function acceptanceCriteriaItems(hasMatchedMemory: boolean): string[] {
+  return [
+    hasMatchedMemory
+      ? "The requested behavior is implemented without violating clearly relevant project memory above."
+      : "The requested behavior is implemented against the current source, tests, and user request; generic AIWiki guardrails remain advisory.",
+    "Relevant existing tests pass, and new focused tests are added where behavior changes.",
+    "User-owned AIWiki data is not overwritten or deleted by default."
+  ];
+}
+
+function notesForCodexItems(hasMatchedMemory: boolean): string[] {
+  return [
+    hasMatchedMemory
+      ? "Use clearly relevant matched pages as project memory and constraints."
+      : "When memory coverage is empty or only loosely related, do not infer constraints that are not present in source, tests, or the user request.",
+    "Create your own implementation plan before editing code.",
+    "Do not treat this brief as exact code instructions."
+  ];
+}
+
 function removeItem(items: string[], value: string): string[] {
   return items.filter((item) => item !== value);
 }
@@ -711,6 +796,7 @@ function firstMatchingItem(items: string[], pattern: RegExp): string | undefined
 
 const MARKDOWN_SECTION_LIMITS: ReadonlyMap<string, number> = new Map([
   ["Must Read", 8],
+  ["Memory Hints", 6],
   ["Rules", 8],
   ["Pitfalls", 8],
   ["Architecture Guard", 6],
@@ -755,6 +841,11 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
   );
   const stalenessWarnings = brief.stalenessWarnings ?? [];
   const acceptance = sectionItems(brief, "Acceptance Criteria");
+  const memoryCoverage = sectionItems(brief, "Memory Coverage");
+  const memoryHints = removeItem(
+    sectionItems(brief, "Memory Hints"),
+    "No low-confidence memory hints found."
+  );
   const architectureGuard = sectionItems(brief, "Architecture Guard");
   const graphify = sectionItems(brief, "Graphify Structural Context");
   const modules = removeItem(
@@ -766,7 +857,7 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
     "No high-risk files matched this task."
   );
   const tests = [
-    firstMatchingItem(acceptance, /test/i),
+    firstMatchingItem(acceptance, /tests? pass|regression tests?/i),
     firstMatchingItem(architectureGuard, /Focused tests/i)
   ].filter((item): item is string => Boolean(item));
   const otherContext = [
@@ -802,6 +893,16 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
       ]
     },
     {
+      title: "Memory Coverage",
+      items: compactItems(
+        memoryCoverage,
+        "No memory coverage information was generated."
+      )
+    },
+    ...(memoryHints.length > 0
+      ? [{ title: "Memory Hints", items: memoryHints }]
+      : []),
+    {
       title: "Rules",
       items: compactItems(rules, "No matching rules found.")
     },
@@ -821,7 +922,9 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
                   ]
                 : [])
             ]
-          : ["No stale wiki memory warnings for selected context."]
+          : brief.selectedDocs.length > 0
+            ? ["No stale wiki memory warnings for selected context."]
+            : ["No selected AIWiki pages to check for staleness."]
     },
     {
       title: "Suggested Tests",
@@ -943,14 +1046,16 @@ export async function generateDevelopmentBrief(
     limit: options.limit ?? DEFAULT_BRIEF_LIMIT
   });
   const results = search.results;
+  const strongResults = highConfidenceResults(results);
+  const hintResults = memoryHintResults(results);
   const stalenessWarnings = await collectWikiStalenessWarnings(
     rootDir,
-    results.map((result) => result.page)
+    strongResults.map((result) => result.page)
   );
-  const selectedDocs = results.map(pageDocPath);
-  const modules = relatedModules(results);
-  const riskFiles = highRiskFiles(results, config.riskFiles);
-  const readFiles = mustReadFiles(results, riskFiles);
+  const selectedDocs = strongResults.map(pageDocPath);
+  const modules = relatedModules(strongResults);
+  const riskFiles = highRiskFiles(strongResults, config.riskFiles);
+  const readFiles = mustReadFiles(strongResults, riskFiles);
   const documentFocused = taskLooksDocumentFocused(task);
   const identityTokens = await projectIdentityTokens(rootDir);
   const discoveredDocs = await discoverMarkdownDocs(
@@ -991,9 +1096,11 @@ export async function generateDevelopmentBrief(
       {
         title: "Goal",
         items: [
-          initialized
-            ? `Complete the requested task for ${config.projectName} while respecting the relevant project memory below.`
-            : `Prepare for ${config.projectName} with a read-only cold scan because AIWiki memory is not initialized yet.`
+          !initialized
+            ? `Prepare for ${config.projectName} with a read-only cold scan because AIWiki memory is not initialized yet.`
+            : results.length > 0
+              ? `Complete the requested task for ${config.projectName} while treating high-confidence memory as constraints and low-confidence hints as advisory.`
+              : `Complete the requested task for ${config.projectName}; no task-specific AIWiki memory matched, so treat generic guardrails as advisory.`
         ]
       },
       ...(!initialized
@@ -1018,11 +1125,16 @@ export async function generateDevelopmentBrief(
       },
       {
         title: "Recommended Direction",
-        items: [
-          "Use the matching AIWiki pages as project memory and constraints.",
-          "Keep the implementation plan inside the coding agent session; this brief should not be treated as exact edit instructions.",
-          "Prefer existing project conventions and local Markdown workflow before adding new infrastructure."
-        ]
+        items: recommendedDirectionItems(strongResults.length > 0)
+      },
+      {
+        title: "Memory Coverage",
+        items: memoryCoverageItems(
+          initialized,
+          selectedDocs,
+          discoveredDocs,
+          discoveredEntryFiles
+        )
       },
       {
         title: "Architecture Boundaries",
@@ -1062,15 +1174,22 @@ export async function generateDevelopmentBrief(
       },
       {
         title: "Relevant Project Memory",
-        items: bulletOrFallback(memoryBullets(results), "No matching wiki pages found.")
+        items: bulletOrFallback(memoryBullets(strongResults), "No high-confidence wiki pages matched.")
+      },
+      {
+        title: "Memory Hints",
+        items: bulletOrFallback(
+          memoryHintBullets(hintResults),
+          "No low-confidence memory hints found."
+        )
       },
       {
         title: "Known Pitfalls",
-        items: bulletOrFallback(pitfallBullets(results), "No matching pitfall pages found.")
+        items: bulletOrFallback(pitfallBullets(strongResults), "No high-confidence pitfall pages matched.")
       },
       {
         title: "Project Rules and Constraints",
-        items: bulletOrFallback(ruleBullets(results), "No matching rule pages found.")
+        items: bulletOrFallback(ruleBullets(strongResults), "No high-confidence rule pages matched.")
       },
       {
         title: "High-Risk Files",
@@ -1096,19 +1215,11 @@ export async function generateDevelopmentBrief(
       },
       {
         title: "Acceptance Criteria",
-        items: [
-          "The requested behavior is implemented without violating the project memory above.",
-          "Relevant existing tests pass, and new focused tests are added where behavior changes.",
-          "User-owned AIWiki data is not overwritten or deleted by default."
-        ]
+        items: acceptanceCriteriaItems(strongResults.length > 0)
       },
       {
         title: "Notes for Codex",
-        items: [
-          "Use this brief as project memory and constraints.",
-          "Create your own implementation plan before editing code.",
-          "Do not treat this brief as exact code instructions."
-        ]
+        items: notesForCodexItems(strongResults.length > 0)
       }
     ]
   };

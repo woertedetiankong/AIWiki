@@ -8,6 +8,7 @@ export interface AgentContextOptions {
   withGraphify?: boolean;
   architectureGuard?: boolean;
   format?: OutputFormat;
+  readOnly?: boolean;
 }
 
 export interface AgentContext {
@@ -115,8 +116,16 @@ export async function generateAgentContext(
         items: [
           `Task: ${task}`,
           `Project: ${brief.projectName}`,
-          "Codex chooses the AIWiki commands; the user does not need to memorize this sequence.",
-          "Context lookup is read-only; this view does not confirm long-term memory writes."
+          "Codex chooses the AIWiki commands; the user does not need to memorize this sequence."
+        ]
+      },
+      {
+        title: "Mode Boundary",
+        items: [
+          options.readOnly
+            ? "Read-only mode: skipped task creation, task claiming, project-map bootstrapping, output files, and long-term memory writes."
+            : "Default workflow mode: the CLI may prepare Codex-owned task state and project-map memory before returning this context.",
+          "Context lookup does not confirm long-term memory writes."
         ]
       },
       {

@@ -2,6 +2,7 @@ import type { WikiPage, WikiPageType } from "./types.js";
 import {
   getHybridIndexStatus,
   readIndexedWikiPages,
+  searchIndexedWikiPages,
   type HybridIndexStatus
 } from "./hybrid-index.js";
 import { scanWikiPages } from "./wiki-store.js";
@@ -14,6 +15,7 @@ export interface SearchResult {
   matchedFields: SearchMatchedField[];
   title: string;
   excerpt?: string;
+  bm25?: number;
 }
 
 export interface SearchOptions {
@@ -163,7 +165,11 @@ function addField(
   return points * matches.length;
 }
 
-function scorePage(page: WikiPage, tokens: string[]): SearchResult | undefined {
+function scorePage(
+  page: WikiPage,
+  tokens: string[],
+  bm25?: number
+): SearchResult | undefined {
   const matchedFields = new Set<SearchMatchedField>();
   const title = extractTitle(page);
   const frontmatterText = JSON.stringify(page.frontmatter);
@@ -195,8 +201,56 @@ function scorePage(page: WikiPage, tokens: string[]): SearchResult | undefined {
     score,
     matchedFields: [...matchedFields],
     title,
-    excerpt: firstMatchingExcerpt(page.body, tokens)
+    excerpt: firstMatchingExcerpt(page.body, tokens),
+    bm25
   };
+}
+
+function rankMarkdownResults(results: SearchResult[], limit: number): SearchResult[] {
+  return results
+    .sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+
+      return a.page.relativePath.localeCompare(b.page.relativePath);
+    })
+    .slice(0, limit);
+}
+
+function searchMarkdownPages(
+  pages: WikiPage[],
+  tokens: string[],
+  limit: number
+): SearchResult[] {
+  return rankMarkdownResults(
+    pages
+      .map((page) => scorePage(page, tokens))
+      .filter((result): result is SearchResult => result !== undefined),
+    limit
+  );
+}
+
+function rankIndexedResults(results: SearchResult[], limit: number): SearchResult[] {
+  return results
+    .sort((a, b) => {
+      if (a.bm25 !== undefined && b.bm25 === undefined) {
+        return -1;
+      }
+      if (a.bm25 === undefined && b.bm25 !== undefined) {
+        return 1;
+      }
+      if (a.bm25 !== undefined && b.bm25 !== undefined && a.bm25 !== b.bm25) {
+        return a.bm25 - b.bm25;
+      }
+
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+
+      return a.page.relativePath.localeCompare(b.page.relativePath);
+    })
+    .slice(0, limit);
 }
 
 export async function searchWikiMemory(
@@ -211,28 +265,52 @@ export async function searchWikiMemory(
     return { query, results: [] };
   }
 
-  const indexStatus = options.useIndex
+  let indexStatus = options.useIndex
     ? await getHybridIndexStatus(rootDir)
     : undefined;
-  const indexedPages = options.useIndex
-    ? await readIndexedWikiPages(rootDir)
-    : undefined;
-  const source = indexedPages ? "sqlite" : "markdown";
-  const pages = (indexedPages ?? (await scanWikiPages(rootDir))).filter((page) => {
+
+  if (options.useIndex && indexStatus?.fresh) {
+    try {
+      const indexedResults = await searchIndexedWikiPages(rootDir, {
+        type: options.type,
+        limit: Math.max(limit * 4, limit),
+        tokens
+      });
+      const indexedPages = await readIndexedWikiPages(rootDir);
+
+      if (indexedResults && indexedPages) {
+        const bm25ByPath = new Map(
+          indexedResults.map((result) => [result.page.relativePath, result.bm25])
+        );
+        const pages = indexedPages.filter((page) => {
+          return options.type ? page.frontmatter.type === options.type : true;
+        });
+        return {
+          query,
+          results: rankIndexedResults(
+            pages
+              .map((page) => scorePage(page, tokens, bm25ByPath.get(page.relativePath)))
+              .filter((result): result is SearchResult => result !== undefined),
+            limit
+          ),
+          source: "sqlite",
+          indexStatus
+        };
+      }
+    } catch (error) {
+      indexStatus = {
+        ...indexStatus,
+        fresh: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  const pages = (await scanWikiPages(rootDir)).filter((page) => {
     return options.type ? page.frontmatter.type === options.type : true;
   });
 
-  const results = pages
-    .map((page) => scorePage(page, tokens))
-    .filter((result): result is SearchResult => result !== undefined)
-    .sort((a, b) => {
-      if (b.score !== a.score) {
-        return b.score - a.score;
-      }
+  const results = searchMarkdownPages(pages, tokens, limit);
 
-      return a.page.relativePath.localeCompare(b.page.relativePath);
-    })
-    .slice(0, limit);
-
-  return { query, results, source, indexStatus };
+  return { query, results, source: "markdown", indexStatus };
 }

@@ -30,7 +30,7 @@ The user can describe work in natural language; the coding agent should choose
 and run the relevant AIWiki commands.
 
 - Start with `aiwiki prime`.
-- For a concrete request, run `aiwiki agent "<task>" --runbook`.
+- For a concrete request, run `aiwiki agent "<task>" --runbook`; add `--read-only` when Codex only needs context and must not prepare task/map state.
 - Before editing a source file, run `aiwiki guard <file>`.
 - After implementation, run `aiwiki reflect --from-git-diff --read-only` and `aiwiki doctor`.
 - Do not run `aiwiki apply <plan> --confirm` unless the user explicitly approves the previewed memory updates.
@@ -44,7 +44,7 @@ then coding agent reports changes, checks, and memory health.
 
 - The public npm package is `@superwoererte/aiwiki`; the installed binary stays `aiwiki`.
 - Do not switch docs or package metadata back to the unscoped `aiwiki` package name. npm blocks that name because it is too similar to `ai-wiki`.
-- SQLite indexing is a core feature and currently depends on `better-sqlite3`. A `prebuild-install` deprecation warning during install is acceptable when installation and `aiwiki index build` succeed.
+- SQLite indexing is a core feature and currently depends on `better-sqlite3`. Indexed search uses local FTS/BM25 but Markdown remains the source of truth, and stale/corrupt indexes must fall back to Markdown. A `prebuild-install` deprecation warning during install is acceptable when installation and `aiwiki index build` succeed.
 
 ## Architecture Rules
 
@@ -84,13 +84,15 @@ then coding agent reports changes, checks, and memory health.
 
 - When changing Codex-facing workflows, test AIWiki on this repository before calling the work done.
 - Users should not need to remember AIWiki commands. For non-trivial code changes, Codex should proactively run `aiwiki agent "<task>"` or `aiwiki agent "<task>" --runbook`, then run `aiwiki guard <file>` before editing concrete source files.
+- Use `aiwiki agent "<task>" --runbook --read-only` when the session is only gathering context; normal agent runs may start/claim a task and bootstrap a project map.
 - For Codex-managed agent teams, use `aiwiki agent "<task>" --runbook --team`; AIWiki provides shared memory and handoff guidance but does not create, schedule, or merge agents.
 - Prefer a tight loop: run `aiwiki brief "<task>"`, inspect whether the output helps implementation, edit the smallest useful improvement, then run the command again.
 - For file-specific changes, run `aiwiki guard <file>` and verify the output is short, relevant, and actionable.
 - For task-continuity changes, run `aiwiki checkpoint` and `aiwiki resume` and verify the resume brief starts with the true next action.
-- For memory-capture changes, run `aiwiki reflect --from-git-diff --output-plan <path>` and `aiwiki apply <path>` as a preview. Do not use `--confirm` unless the candidate memory has been reviewed.
+- For memory-capture changes, run `aiwiki reflect --from-git-diff --output-plan <path>` and `aiwiki apply <path>` as a preview. Re-run the preview immediately before confirmation because `apply --confirm` validates preview freshness and append target hashes. Do not use `--confirm` unless the candidate memory has been reviewed.
 - After implementation, Codex should run `aiwiki reflect --from-git-diff --read-only`; if useful memory candidates appear, create and preview an output plan, but never confirm it without explicit user approval.
 - For Codex-owned workflow changes, run `aiwiki eval usability` as a maintainer regression check. It should cover natural-language resume, payment guard precision, module import preview safety, and maintainability/hardcoding guidance without calling a remote provider.
+- For large-repo workflow changes, run `aiwiki eval large-repos`; guard targets must exist in the sparse checkout and be covered by fixture sparse paths.
 - Run `aiwiki doctor` near the end of AIWiki-affecting tasks and report memory health next actions in the final response.
 - Treat dogfood findings as product feedback: if CLI output is noisy, misleading, stale, or hard to copy into Codex, fix the workflow or document the limitation.
 - Keep generated runtime artifacts out of commits unless they are stable project memory. Eval logs, graph outputs, context-pack drafts, and task run state are local artifacts by default.

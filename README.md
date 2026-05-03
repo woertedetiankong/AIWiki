@@ -4,7 +4,8 @@ AIWiki is a local-first CLI for AI coding memory. It keeps project memory in `.a
 
 The current implementation is a Node.js TypeScript ESM CLI for Node.js 20, 22,
 and 24. It does not require a remote LLM provider, cloud sync, MCP, or a Web UI.
-Fast local indexed search uses bundled SQLite support through `better-sqlite3`.
+Fast local indexed search uses bundled SQLite FTS/BM25 support through
+`better-sqlite3`.
 
 AIWiki is designed so users do not need to memorize every command. The intended
 workflow is: the user describes the requirement, and Codex uses AIWiki to fetch
@@ -107,7 +108,7 @@ The user can describe work in natural language; the coding agent should choose
 and run the relevant AIWiki commands.
 
 - Start with `aiwiki prime`.
-- For a concrete request, run `aiwiki agent "<task>" --runbook`.
+- For a concrete request, run `aiwiki agent "<task>" --runbook`; add `--read-only` when Codex must only gather context.
 - Before editing a source file, run `aiwiki guard <file>`.
 - After implementation, run `aiwiki reflect --from-git-diff --read-only` and `aiwiki doctor`.
 - Do not run `aiwiki apply <plan> --confirm` unless the user explicitly approves the previewed memory updates.
@@ -115,14 +116,18 @@ and run the relevant AIWiki commands.
 
 Use `aiwiki agent "<task>" --runbook` when Codex needs a full runbook,
 `aiwiki agent "<task>" --runbook --team` when the human explicitly wants a
-multi-agent workflow, and `aiwiki brief "<task>"` when a compact development
+multi-agent workflow, `aiwiki agent "<task>" --runbook --read-only` when Codex
+must only gather context, and `aiwiki brief "<task>"` when a compact development
 brief is enough. `aiwiki codex "<task>"` remains a compatibility alias for the
 runbook path, but `agent` is the primary entry point.
 
 `agent` is designed as the Codex-owned entry point: by default it starts or
 reuses the active AIWiki task and writes an initial project map when one is
 missing. Humans should not need to remember those setup commands. Use
-`--no-task` or `--no-map` only for diagnostic runs that must avoid those writes.
+`--read-only` when no task or map writes should happen, and use `--no-task` or
+`--no-map` only for diagnostic runs that avoid one write path while keeping the
+other. Agent and resume output includes a mode boundary so Codex can tell
+context-only runs apart from workflow-state preparation.
 
 After development, Codex should close the loop in a preview-first way:
 
@@ -146,7 +151,9 @@ appends refresh the page `last_updated` only after review.
 would create, append, or skip, what each memory means in plain language, and
 what to review before confirmation. Confirmed writes only create or append
 supported memory pages under `.aiwiki/wiki/`, then refresh derived AIWiki log
-and graph data when writes occur.
+and graph data when writes occur. Preview runs store freshness state under
+`.aiwiki/cache/apply-previews`; `--confirm` requires a fresh preview and refuses
+append writes if the plan or target wiki page changed after preview.
 
 For long-running projects, periodically check memory health:
 
@@ -164,9 +171,12 @@ derived hybrid index:
 `.aiwiki/cache/index.sqlite` for fast local queries and
 `.aiwiki/snapshots/wiki-pages.jsonl` as a line-oriented snapshot. Markdown under
 `.aiwiki/wiki/` remains the source of truth; the SQLite index can be rebuilt at
-any time. `aiwiki index status` compares the SQLite rows back to current
-Markdown and reports stale, missing, or extra pages. `aiwiki search --index`
-prints the same freshness signal so indexed results do not silently drift.
+any time. Indexed search uses SQLite FTS/BM25 for ranking while preserving
+Markdown-style recall across all indexed pages. `aiwiki index status` compares
+the SQLite rows and FTS table back to current Markdown and reports stale,
+missing, extra, or drifted pages. `aiwiki search --index` prints the same
+freshness signal and automatically falls back to Markdown search when the
+derived index is stale or corrupt.
 
 ## Codex Happy Path
 
@@ -219,6 +229,7 @@ When Codex only needs context and should not write runtime logs, eval cases,
 task resume files, or output plans, use the pure read-only variant:
 
 ```bash
+aiwiki agent "implement the next feature" --runbook --read-only
 aiwiki brief "implement the next feature" --read-only
 aiwiki guard src/path/to/file.ts
 aiwiki resume --read-only
@@ -226,6 +237,11 @@ aiwiki reflect --from-git-diff --read-only
 ```
 
 `brief` and `guard` are safe to run before initialization. In that cold-start mode they perform a read-only project scan, print setup guidance, and do not create `.aiwiki/` files. Run `aiwiki init --project-name <name>` and `aiwiki map --write` when the project is ready to keep durable local memory.
+
+Brief output keeps high-confidence context in `Must Read` and moves weaker
+matches to `Memory Hints`. Treat `Memory Hints` as prompts to inspect, not as
+project constraints. Both `brief` and `guard` include `Memory Coverage` so sparse
+memory is visible before Codex relies on it.
 
 AIWiki's built-in semantic guard rules prioritize Python, Java, TypeScript,
 JavaScript, C, and SQL/database change surfaces. They look for general
@@ -311,7 +327,7 @@ Top-level help focuses on daily coding and memory maintenance:
 ```bash
 aiwiki init [--project-name <name>] [--force]
 aiwiki prime [--limit <n>] [--format markdown|json]
-aiwiki agent "<task>" [--runbook] [--team] [--no-task] [--no-map] [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
+aiwiki agent "<task>" [--runbook] [--team] [--no-task] [--no-map] [--read-only] [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
 aiwiki search "<query>" [--type <type>] [--limit <n>] [--index] [--format markdown|json]
 aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force] [--with-graphify] [--architecture-guard] [--read-only] [--format markdown|json]
 aiwiki guard <file> [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
@@ -338,7 +354,7 @@ Advanced and compatibility commands remain available, but are hidden from the
 top-level help. Use `aiwiki help advanced` to list them:
 
 ```bash
-aiwiki codex "<task>" [--team]  # compatibility alias for agent --runbook
+aiwiki codex "<task>" [--team] [--read-only]  # compatibility alias for agent --runbook
 aiwiki schema [all|task|task-event|prime] [--format markdown|json]
 aiwiki index build [--no-jsonl] [--format markdown|json]
 aiwiki index status [--format markdown|json]
@@ -361,7 +377,9 @@ aiwiki eval usability [--scenario <name...>] [--format markdown|json]
 `aiwiki eval large-repos` is a maintainer smoke test, not part of the normal
 daily coding loop. It sparse-checks out representative large open-source
 repositories into a cache directory, runs `prime`, `agent --runbook --team`,
-and `guard`, then fails if the expected language risk signals disappear.
+and `guard`, then fails if the expected language risk signals disappear or
+generated guard targets are missing from the sparse checkout. The eval also
+checks that guard targets are covered by the fixture sparse paths.
 `aiwiki eval usability` is the tiny local Codex-owned workflow loop: it simulates
 natural-language requests for resume, payment guard precision, module import
 preview safety, maintainability/hardcoding guidance, and maintain stale-memory
@@ -376,7 +394,7 @@ Important source files:
 - `src/ignore.ts`: shared project scan ignore rules, including `.gitignore` and config overrides.
 - `src/templates.ts`: default `.aiwiki/` Markdown and prompt templates.
 - `src/managed-write.ts`: non-overwrite and forceable-template write policy.
-- `src/hybrid-index.ts`: derived SQLite wiki index and JSONL snapshot generation.
+- `src/hybrid-index.ts`: derived SQLite FTS/BM25 wiki index and JSONL snapshot generation.
 - `src/brief.ts`, `src/guard.ts`, `src/maintain.ts`, `src/reflect.ts`, `src/ingest.ts`, `src/apply.ts`: core memory workflow services.
 - `src/errors.ts`, `src/risk-rules.ts`: structured JSON CLI errors and reusable semantic risk heuristics.
 - `src/graph.ts`, `src/graphify.ts`, `src/architecture.ts`, `src/module-pack.ts`, `src/task.ts`, `src/prime.ts`, `src/schema.ts`, `src/large-repo-eval.ts`, `src/usability-eval.ts`: graph, external context, architecture, module portability, task work graph, startup dashboard, agent-facing schemas, large-repository smoke evals, and Codex-owned usability evals.
@@ -393,10 +411,11 @@ Product and implementation documents:
 
 Next development focus:
 
-- Continue improving current CLI usability for Codex from real-project dogfood feedback.
-- Review generated `reflect --from-git-diff` refresh candidates and improve their specificity when they are too generic.
-- Improve Windows local dogfood command ergonomics and document the most reliable source-entrypoint command.
-- Treat larger items in `SPEC-FUTURE.md` as backlog until the current CLI feels fast, short, and trustworthy across multiple projects.
+- Tune `architecture audit` line-level evidence and false-positive severity.
+- Broaden real-project dogfood for Chinese/Unicode retrieval and guard precision across more local codebases.
+- Review the current doctor rule-promotion candidates before turning repeated pitfalls into active rules.
+- Keep `reflect --from-git-diff` candidate specificity under dogfood instead of adding broad memory automation.
+- Treat larger items in `SPEC-FUTURE.md` as backlog until the current CLI remains fast, short, and trustworthy across multiple projects.
 
 ## Verify
 

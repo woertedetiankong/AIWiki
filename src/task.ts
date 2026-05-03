@@ -843,7 +843,10 @@ function limitItems(items: string[], limit: number): string[] {
   ];
 }
 
-function resumeMarkdown(status: TaskStatusData): string {
+function resumeMarkdown(
+  status: TaskStatusData,
+  options: Pick<TaskResumeOptions, "readOnly"> = {}
+): string {
   const completed = excerptList(status.progress, "Completed");
   const inProgress = excerptList(status.progress, "In Progress");
   const notStarted = excerptList(status.progress, "Not Started");
@@ -867,6 +870,12 @@ function resumeMarkdown(status: TaskStatusData): string {
   return `# Resume Brief for Codex
 
 下一步做什么 / Next Action: ${nextAction}
+
+## Mode Boundary
+${options.readOnly
+  ? "- Read-only mode: generated from task state only; no resume files or output files were written."
+  : "- Write mode: this command refreshes the task resume file or the requested --output path."}
+- To inspect task continuity without writes, run \`aiwiki resume --read-only\`.
 
 ## Continue From Here
 ${bulletList(continueFromHere, "No next step recorded. Inspect the current git diff before editing.")}
@@ -1455,7 +1464,7 @@ export async function resumeTask(
   await loadAIWikiConfig(rootDir);
   const id = await resolveTaskId(rootDir, taskId);
   const status = await loadStatus(rootDir, id);
-  const resume = resumeMarkdown(status);
+  const resume = resumeMarkdown(status, { readOnly: options.readOnly });
   const outputPath = options.readOnly
     ? undefined
     : options.output

@@ -118,6 +118,8 @@ describe("AIWiki task continuity", () => {
 
     const resume = await resumeTask(rootDir);
     expect(resume.markdown).toContain("# Resume Brief for Codex");
+    expect(resume.markdown).toContain("## Mode Boundary");
+    expect(resume.markdown).toContain("Write mode");
     expect(resume.markdown).toContain("## Continue From Here");
     expect(resume.markdown).toContain("## Next Steps");
     expect(resume.markdown).toContain("## Current Status");
@@ -191,6 +193,7 @@ describe("AIWiki task continuity", () => {
     const result = await resumeTask(rootDir, undefined, { readOnly: true });
 
     expect(result.markdown).toContain("continue safely");
+    expect(result.markdown).toContain("Read-only mode");
     expect(result.data.outputPath).toBeUndefined();
     expect(await readFile(resumePath, "utf8")).toBe("custom user resume\n");
   });

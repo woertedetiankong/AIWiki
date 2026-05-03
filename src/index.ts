@@ -98,7 +98,8 @@ export {
   formatHybridIndexStatus,
   formatHybridIndexStatusMarkdown,
   getHybridIndexStatus,
-  readIndexedWikiPages
+  readIndexedWikiPages,
+  searchIndexedWikiPages
 } from "./hybrid-index.js";
 export {
   detectFileLanguage,
@@ -284,7 +285,9 @@ export type {
   HybridIndexBuildResult,
   HybridIndexOptions,
   HybridIndexRecord,
-  HybridIndexStatus
+  HybridIndexStatus,
+  IndexedWikiSearchOptions,
+  IndexedWikiSearchResult
 } from "./hybrid-index.js";
 export type {
   LintIssue,

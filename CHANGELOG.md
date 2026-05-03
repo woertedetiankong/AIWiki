@@ -3,6 +3,19 @@
 This file summarizes the implementation history that used to live in root-level
 `implementation-m*.md` files. Full milestone notes are archived under `docs/archive/`.
 
+## 2026-05-03
+
+### Mature Workflow Hardening
+
+- Split `brief` retrieval into high-confidence `Must Read` memory and lower-confidence `Memory Hints`, so weak recall no longer reads as mandatory implementation guidance.
+- Added `Memory Coverage` wording to `brief` and `guard` so sparse project memory is explicit instead of pretending AIWiki has target-specific lessons.
+- Clarified `agent`, `codex`, and `resume` read-only/write mode boundaries; read-only agent runs now avoid task and project-map writes, while normal agent runs prepare workflow state for Codex.
+- Hardened team runbooks and guard targets so generated guard commands reference files that actually exist.
+- Upgraded indexed search to use the derived SQLite FTS table with BM25 ranking while preserving Markdown-style substring recall, and made stale, corrupt, or drifted FTS indexes automatically fall back to Markdown search.
+- Added apply preview freshness state under `.aiwiki/cache/apply-previews`; confirmed apply now requires a fresh preview and refuses append writes if the target page changed after preview.
+- Strengthened `aiwiki eval large-repos` so guard targets must exist inside the sparse checkout and be covered by fixture sparse paths.
+- Verified the hardened loop with `npm run release:check`, `npm run dev:aiwiki -- eval large-repos --skip-clone --format json`, `npm run dev:aiwiki -- eval usability --format json`, `npm run dev:aiwiki -- doctor --format json`, and `npm run dev:aiwiki -- index status --format json`.
+
 ## 2026-05-02
 
 ### Codex-Owned Usability Loop

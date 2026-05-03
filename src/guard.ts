@@ -39,6 +39,8 @@ export interface FileGuardrailSection {
 export interface FileGuardrails {
   filePath: string;
   matchedDocs: string[];
+  exactMatchedDocs: string[];
+  contextualDocs: string[];
   suggestedFileNote: string;
   fileNoteRecommended: boolean;
   suggestedTests: string[];
@@ -532,8 +534,72 @@ function withoutFallback(items: string[], fallback: string): string[] {
   return items.filter((item) => item !== fallback);
 }
 
+function memoryCoverageItems(input: {
+  initialized: boolean;
+  exactMatchedDocs: string[];
+  contextualDocs: string[];
+  fileSignals: FileGuardrails["fileSignals"];
+}): string[] {
+  if (!input.initialized) {
+    return [
+      "No durable .aiwiki memory was loaded; this guard is based on project file signals only.",
+      "Treat this output as cold-start guidance, not learned file-specific memory."
+    ];
+  }
+
+  if (input.exactMatchedDocs.length > 0) {
+    return [
+      `Found ${input.exactMatchedDocs.length} file-specific AIWiki page(s).`,
+      input.contextualDocs.length > 0
+        ? `Also retrieved ${input.contextualDocs.length} contextual page(s) from path search; verify relevance before treating them as constraints.`
+        : "No additional path-search context was needed.",
+      "Review file-specific memory before editing, then verify it against the current source and tests."
+    ];
+  }
+
+  if (input.contextualDocs.length > 0) {
+    return [
+      "No file-specific AIWiki memory matched this file.",
+      `Retrieved ${input.contextualDocs.length} contextual page(s) from path search; treat them as advisory until source/tests confirm relevance.`
+    ];
+  }
+
+  if (!input.fileSignals.exists) {
+    return [
+      "No file-specific AIWiki memory matched this new or missing file.",
+      "Treat this output as creation guidance; inspect nearby source and tests before choosing an implementation."
+    ];
+  }
+
+  return [
+    "No file-specific AIWiki memory matched this file.",
+    "Use the current source, tests, and user request as the source of truth; treat generic checks as advisory."
+  ];
+}
+
+function doNotItems(guardrails: FileGuardrails): string[] {
+  const coverageSpecific = guardrails.exactMatchedDocs.length > 0
+    ? [`Do not edit ${guardrails.filePath} before reviewing matched rules and pitfalls.`]
+    : guardrails.contextualDocs.length > 0
+      ? [
+          `Do not treat search-only context for ${guardrails.filePath} as file-specific project memory.`,
+          "Do not skip source and test inspection just because contextual guardrails were generated."
+        ]
+    : [
+        `Do not infer project-specific constraints for ${guardrails.filePath} from empty AIWiki matches.`,
+        "Do not skip source and test inspection just because generic guardrails were generated."
+      ];
+
+  return [
+    ...coverageSpecific,
+    "Do not overwrite user-owned AIWiki notes while applying fixes.",
+    "Do not promote new rules from this edit without user confirmation."
+  ];
+}
+
 export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string {
   const setup = sectionItems(guardrails, "AIWiki Setup");
+  const memoryCoverage = sectionItems(guardrails, "Memory Coverage");
   const architectureGuard = sectionItems(guardrails, "Architecture Guard");
   const graphify = sectionItems(guardrails, "Graphify Structural Context");
   const relatedModules = sectionItems(guardrails, "Related Modules").filter(
@@ -561,15 +627,18 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
   const sections: FileGuardrailSection[] = [
     {
       title: "Do Not",
-      items: [
-        `Do not edit ${guardrails.filePath} before reviewing matched rules and pitfalls.`,
-        "Do not overwrite user-owned AIWiki notes while applying fixes.",
-        "Do not promote new rules from this edit without user confirmation."
-      ]
+      items: doNotItems(guardrails)
     },
     ...(setup.length > 0
       ? [{ title: "Setup", items: setup }]
       : []),
+    {
+      title: "Memory Coverage",
+      items: stableItems(
+        memoryCoverage,
+        "No memory coverage information was generated."
+      )
+    },
     {
       title: "Rules",
       items: stableItems(rules, "No matching rules found.")
@@ -590,7 +659,9 @@ export function formatFileGuardrailsMarkdown(guardrails: FileGuardrails): string
                   ]
                 : [])
             ]
-          : ["No stale wiki memory warnings for matched context."]
+          : guardrails.matchedDocs.length > 0
+            ? ["No stale wiki memory warnings for matched context."]
+            : ["No matched AIWiki pages to check for staleness."]
     },
     {
       title: "Required Checks",
@@ -678,11 +749,17 @@ export async function generateFileGuardrails(
   for (const page of exactPages) {
     pagesByPath.set(pageKey(page), page);
   }
+  const contextualPages: WikiPage[] = [];
   for (const result of search.results.filter((item) => item.score >= MIN_GUARD_SEARCH_SCORE)) {
+    if (!pagesByPath.has(pageKey(result.page))) {
+      contextualPages.push(result.page);
+    }
     pagesByPath.set(pageKey(result.page), result.page);
   }
 
   const pages = sortPages([...pagesByPath.values()]);
+  const sortedExactPages = sortPages(exactPages);
+  const sortedContextualPages = sortPages(contextualPages);
   const stalenessWarnings = await collectWikiStalenessWarnings(rootDir, pages);
   const modules = relatedModules(pages);
   const rulePages = pagesOfType(pages, "rule");
@@ -706,6 +783,8 @@ export async function generateFileGuardrails(
   const guardrails: FileGuardrails = {
     filePath: normalizedFile,
     matchedDocs: pages.map(docPath),
+    exactMatchedDocs: sortedExactPages.map(docPath),
+    contextualDocs: sortedContextualPages.map(docPath),
     suggestedFileNote,
     fileNoteRecommended,
     suggestedTests: testSuggestions,
@@ -725,6 +804,15 @@ export async function generateFileGuardrails(
             }
           ]
         : []),
+      {
+        title: "Memory Coverage",
+        items: memoryCoverageItems({
+          initialized,
+          exactMatchedDocs: sortedExactPages.map(docPath),
+          contextualDocs: sortedContextualPages.map(docPath),
+          fileSignals: signals
+        })
+      },
       {
         title: "Related Modules",
         items: fallback(modules, "No related module pages found.")

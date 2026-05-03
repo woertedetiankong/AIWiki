@@ -383,6 +383,8 @@ function scoreRepresentativeRiskFile(filePath: string): ScoredRiskFile | undefin
     (normalized.includes("/api/") ||
       normalized.includes("route.") ||
       normalized.includes("layout.") ||
+      normalized.includes("/src/client/") ||
+      normalized.includes("/src/server/") ||
       normalized.includes("server") ||
       normalized.includes("auth") ||
       normalized.includes("security"))

@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import {
   buildHybridIndex,
@@ -117,7 +118,73 @@ describe("hybrid wiki index", () => {
     expect(response.source).toBe("sqlite");
     expect(response.indexStatus?.fresh).toBe(true);
     expect(response.results[0]?.title).toBe("Stripe webhook raw body");
+    expect(response.results[0]?.bm25).toEqual(expect.any(Number));
     expect(formatSearchResponse(response, "markdown")).toContain("Index fresh: yes");
+  });
+
+  it("falls back to Markdown search when the SQLite index is stale", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+    await buildHybridIndex(rootDir);
+
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "payment.md"),
+      {
+        type: "module",
+        title: "Payment",
+        modules: ["payment"],
+        files: ["src/lib/stripe.ts"],
+        tags: ["billing"]
+      },
+      "# Module: Payment\n\nACH payouts are documented after the index was built.\n"
+    );
+
+    const response = await searchWikiMemory(rootDir, "ACH payouts", {
+      useIndex: true
+    });
+
+    expect(response.source).toBe("markdown");
+    expect(response.indexStatus?.fresh).toBe(false);
+    expect(response.results[0]?.title).toBe("Payment");
+    expect(response.results[0]?.bm25).toBeUndefined();
+  });
+
+  it("falls back to Markdown search when the SQLite index is corrupt", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+    const result = await buildHybridIndex(rootDir);
+    await writeFile(result.dbPath, "not a sqlite database", "utf8");
+
+    const response = await searchWikiMemory(rootDir, "stripe webhook", {
+      useIndex: true
+    });
+
+    expect(response.source).toBe("markdown");
+    expect(response.indexStatus?.fresh).toBe(false);
+    expect(response.indexStatus?.error).toBeDefined();
+    expect(response.results[0]?.title).toBe("Stripe webhook raw body");
+  });
+
+  it("falls back to Markdown search when the SQLite FTS table drifts", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+    const result = await buildHybridIndex(rootDir);
+    const db = new Database(result.dbPath);
+    try {
+      db.prepare("DELETE FROM wiki_pages_fts").run();
+    } finally {
+      db.close();
+    }
+
+    const status = await getHybridIndexStatus(rootDir);
+    const response = await searchWikiMemory(rootDir, "stripe webhook", {
+      useIndex: true
+    });
+
+    expect(status.fresh).toBe(false);
+    expect(status.error).toContain("SQLite FTS table drift");
+    expect(response.source).toBe("markdown");
+    expect(response.results[0]?.title).toBe("Stripe webhook raw body");
   });
 
   it("reports stale, missing, and extra index pages", async () => {

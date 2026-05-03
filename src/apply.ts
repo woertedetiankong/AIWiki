@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
+  CACHE_DIR,
   WIKI_DIR
 } from "./constants.js";
 import { loadAIWikiConfig } from "./config.js";
@@ -95,6 +97,7 @@ export interface WikiUpdateOperation {
   action: WikiUpdateAction;
   source?: WikiUpdateSource;
   reason: string;
+  targetHash?: string;
   summaryPreview?: string;
   frontmatterPreview?: Record<string, unknown>;
   bodyPreview?: string;
@@ -115,6 +118,7 @@ export interface WikiUpdatePreview {
 export interface WikiUpdateApplyOptions {
   confirm?: boolean;
   rebuildGraph?: boolean;
+  previewStateKey?: string;
 }
 
 export interface WikiUpdateApplyResult {
@@ -136,6 +140,16 @@ const TYPE_DIRS: Record<WikiUpdatePageType, string> = {
   pattern: "patterns",
   rule: "rules"
 };
+
+interface ApplyPreviewState {
+  version: string;
+  planHash: string;
+  operations: Array<{
+    path: string;
+    action: WikiUpdateAction;
+    targetHash?: string;
+  }>;
+}
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(
@@ -172,6 +186,23 @@ async function pathExists(filePath: string): Promise<boolean> {
 
     throw error;
   }
+}
+
+function hashText(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function planHash(plan: WikiUpdatePlan): string {
+  return hashText(JSON.stringify(plan));
+}
+
+async function fileHash(filePath: string): Promise<string> {
+  return hashText(await readFile(filePath, "utf8"));
+}
+
+function previewStatePath(rootDir: string, stateKey: string): string {
+  const safeKey = hashText(stateKey).slice(0, 24);
+  return resolveProjectPath(rootDir, CACHE_DIR, "apply-previews", `${safeKey}.json`);
 }
 
 function assertFrontmatterMatchesEntry(entry: WikiUpdatePlanEntry): void {
@@ -392,7 +423,8 @@ export async function readWikiUpdatePlanFile(
 function operationForEntry(
   rootDir: string,
   entry: WikiUpdatePlanEntry,
-  exists: boolean
+  exists: boolean,
+  targetHash: string | undefined
 ): WikiUpdateOperation {
   const relativePath = pagePath(entry);
   resolveProjectPath(rootDir, relativePath);
@@ -419,6 +451,7 @@ function operationForEntry(
       action: "append",
       source: entry.source,
       reason: "Target wiki page exists and explicit append sections were provided.",
+      targetHash,
       summaryPreview: entry.summary ?? entry.append.at(0)?.body,
       appendPreview: appendPreview(entry)
     };
@@ -431,6 +464,7 @@ function operationForEntry(
     action: "skip",
     source: entry.source,
     summaryPreview: entry.summary,
+    targetHash,
     reason: "Target wiki page already exists and no explicit append sections were provided."
   };
 }
@@ -443,8 +477,14 @@ async function operationsForPlan(
   for (const entry of plan.entries) {
     const relativePath = pagePath(entry);
     const absolutePath = resolveProjectPath(rootDir, relativePath);
+    const exists = await pathExists(absolutePath);
     operations.push(
-      operationForEntry(rootDir, entry, await pathExists(absolutePath))
+      operationForEntry(
+        rootDir,
+        entry,
+        exists,
+        exists ? await fileHash(absolutePath) : undefined
+      )
     );
   }
   return operations;
@@ -464,7 +504,7 @@ export async function generateWikiUpdatePreview(
     confirmRequired: true,
     operations,
     safety: [
-      "Dry-run previews do not write files.",
+      "Dry-run previews do not write wiki pages.",
       "Confirmed applies only create new wiki pages or append explicit sections.",
       "Existing wiki pages are never overwritten by this workflow.",
       "Agent rule files outside .aiwiki/wiki/rules are not modified."
@@ -486,6 +526,10 @@ function formatOperation(operation: WikiUpdateOperation): string {
     for (const [key, value] of Object.entries(operation.frontmatterPreview)) {
       lines.push(`    - ${key}: ${JSON.stringify(value)}`);
     }
+  }
+
+  if (operation.targetHash) {
+    lines.push(`  - Target Hash: ${operation.targetHash}`);
   }
 
   if (operation.bodyPreview) {
@@ -647,6 +691,83 @@ function applyToJson(
   return `${JSON.stringify(result, null, 2)}\n`;
 }
 
+function stateForPreview(plan: WikiUpdatePlan, preview: WikiUpdatePreview): ApplyPreviewState {
+  return {
+    version: "1",
+    planHash: planHash(plan),
+    operations: preview.operations.map((operation) => ({
+      path: operation.path,
+      action: operation.action,
+      targetHash: operation.targetHash
+    }))
+  };
+}
+
+async function writePreviewState(
+  rootDir: string,
+  stateKey: string,
+  state: ApplyPreviewState
+): Promise<void> {
+  const filePath = previewStatePath(rootDir, stateKey);
+  await mkdir(path.dirname(filePath), { recursive: true });
+  await writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+async function readPreviewState(
+  rootDir: string,
+  stateKey: string
+): Promise<ApplyPreviewState | undefined> {
+  try {
+    return JSON.parse(
+      await readFile(previewStatePath(rootDir, stateKey), "utf8")
+    ) as ApplyPreviewState;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+async function assertPreviewStateFresh(
+  rootDir: string,
+  stateKey: string,
+  plan: WikiUpdatePlan,
+  preview: WikiUpdatePreview
+): Promise<void> {
+  const state = await readPreviewState(rootDir, stateKey);
+  if (!state) {
+    throw new Error(
+      "Apply confirmation requires a fresh preview. Run `aiwiki apply <plan>` before `aiwiki apply <plan> --confirm`."
+    );
+  }
+
+  if (state.planHash !== planHash(plan)) {
+    throw new Error(
+      "Apply confirmation refused because the plan changed after the last preview. Preview the plan again before confirming."
+    );
+  }
+
+  for (const operation of preview.operations) {
+    if (operation.action !== "append") {
+      continue;
+    }
+
+    const previewed = state.operations.find((item) => item.path === operation.path);
+    if (!previewed?.targetHash) {
+      throw new Error(
+        `Apply confirmation refused because no preview hash was recorded for ${operation.path}. Preview the plan again before confirming.`
+      );
+    }
+    if (previewed.targetHash !== operation.targetHash) {
+      throw new Error(
+        `Apply confirmation refused because ${operation.path} changed after preview. Preview the plan again before confirming.`
+      );
+    }
+  }
+}
+
 export async function applyWikiUpdatePlan(
   rootDir: string,
   planInput: unknown,
@@ -655,6 +776,7 @@ export async function applyWikiUpdatePlan(
   const config = await loadAIWikiConfig(rootDir);
   const plan = planFromUnknown(planInput);
   const preview = await generateWikiUpdatePreview(rootDir, plan);
+  const previewStateKey = options.previewStateKey ?? planHash(plan);
   const created: string[] = [];
   const appended: string[] = [];
   const skipped = preview.operations
@@ -664,7 +786,13 @@ export async function applyWikiUpdatePlan(
   let indexUpdated = false;
   let graphUpdated = false;
 
+  if (!options.confirm) {
+    await writePreviewState(rootDir, previewStateKey, stateForPreview(plan, preview));
+  }
+
   if (options.confirm) {
+    await assertPreviewStateFresh(rootDir, previewStateKey, plan, preview);
+
     for (const [index, entry] of plan.entries.entries()) {
       const operation = preview.operations[index];
       if (!operation || operation.action === "skip") {

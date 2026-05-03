@@ -107,6 +107,7 @@ describe("generateDevelopmentBrief", () => {
     expect(result.markdown).toContain("# Development Brief: stripe webhook");
     expect(result.markdown).toContain("## Must Read");
     expect(result.markdown).toContain("## Do Not");
+    expect(result.markdown).toContain("## Memory Coverage");
     expect(result.markdown).toContain("## Rules");
     expect(result.markdown).toContain("## Pitfalls");
     expect(result.markdown).toContain("## Suggested Tests");
@@ -121,6 +122,7 @@ describe("generateDevelopmentBrief", () => {
     );
     expect(result.markdown).toContain("Stripe webhook raw body");
     expect(result.markdown).toContain("Keep Stripe secrets server-side");
+    expect(result.markdown).toContain("AIWiki memory page(s).");
     expect(result.markdown).toContain("Do not treat this brief as exact code instructions.");
     expect(result.markdown).not.toContain("Step 1");
     expect(result.markdown).not.toContain("Edit ");
@@ -188,6 +190,7 @@ describe("generateDevelopmentBrief", () => {
       "add stripe payment provider webhook"
     );
     const parsed = JSON.parse(result.json) as {
+      selectedDocs: string[];
       sections: Array<{ title: string; items: string[] }>;
     };
     const moduleMemory = parsed.sections.find(
@@ -214,15 +217,23 @@ describe("generateDevelopmentBrief", () => {
       format: "json"
     });
     const parsed = JSON.parse(result.json) as {
+      selectedDocs: string[];
       sections: Array<{ title: string; items: string[] }>;
     };
     const sectionTitles = parsed.sections.map((section) => section.title);
 
     expect(sectionTitles).toContain("Architecture Boundaries");
+    expect(sectionTitles).toContain("Memory Coverage");
     expect(sectionTitles).toContain("Hardcoding and Configuration Risks");
     expect(sectionTitles).toContain("Portability Checklist");
     expect(sectionTitles).toContain("Module Memory to Maintain");
     expect(result.markdown).toContain("## Built-In Generic Guardrails");
+    expect(result.markdown).toContain("## Memory Coverage");
+    expect(result.markdown).toContain("No task-specific AIWiki memory pages matched this request.");
+    expect(result.markdown).toContain("Do not infer project-specific constraints from generic guardrails");
+    expect(result.markdown).toContain("No high-confidence rule pages matched.");
+    expect(result.markdown).toContain("No high-confidence pitfall pages matched.");
+    expect(result.markdown).toContain("No selected AIWiki pages to check for staleness.");
     expect(result.markdown).toContain("## Other Context");
     expect(result.markdown).toContain("No additional context matched this task.");
     expect(result.markdown).toContain("No large-file structure warnings detected.");
@@ -230,6 +241,43 @@ describe("generateDevelopmentBrief", () => {
     expect(parsed.sections.find(
       (section) => section.title === "Module Memory to Maintain"
     )?.items.join("\n")).toContain("Record reusable module decisions after implementation.");
+    expect(parsed.sections.find(
+      (section) => section.title === "Recommended Direction"
+    )?.items.join("\n")).toContain("source code, tests, and the user's request as the source of truth");
+    expect(parsed.selectedDocs).toEqual([]);
+  });
+
+  it("keeps low-confidence memory out of must-read and surfaces it as hints", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "pitfalls"), { recursive: true });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "pitfalls", "generic-unrelated-note.md"),
+      {
+        type: "pitfall",
+        title: "Generic unrelated note",
+        modules: ["search"],
+        files: ["src/search.ts"],
+        severity: "high"
+      },
+      "# Pitfall: Generic unrelated note\n\nA body-only mention of settings page should remain advisory.\n"
+    );
+
+    const result = await generateDevelopmentBrief(rootDir, "add settings page", {
+      format: "json"
+    });
+    const parsed = JSON.parse(result.json) as {
+      selectedDocs: string[];
+      sections: Array<{ title: string; items: string[] }>;
+    };
+    const hints = parsed.sections.find((section) => section.title === "Memory Hints");
+
+    expect(parsed.selectedDocs).toEqual([]);
+    expect(result.markdown).toContain("## Memory Hints");
+    expect(result.markdown).toContain("Generic unrelated note");
+    expect(result.markdown).toContain("No high-confidence pitfall pages matched.");
+    expect(result.markdown).not.toContain("wiki/pitfalls/generic-settings-note.md\n");
+    expect(hints?.items.join("\n")).toContain("matched body");
   });
 
   it("discovers task-matching source entry files for cold-start projects", async () => {

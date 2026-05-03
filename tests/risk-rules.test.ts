@@ -161,16 +161,18 @@ describe("risk rules", () => {
       "src/main/java/UserController.java",
       "package.json",
       "src/app/api/auth/route.ts",
+      "packages/react-dom/src/client/ReactDOMClient.js",
       "Makefile",
       "include/project/api.h",
       "lib/memdebug.c"
-    ]);
+    ], 8);
 
     expect(targets).toEqual(
       expect.arrayContaining([
         "django/contrib/auth/views.py",
         "src/main/java/UserController.java",
         "src/app/api/auth/route.ts",
+        "packages/react-dom/src/client/ReactDOMClient.js",
         "include/project/api.h",
         "lib/memdebug.c"
       ])

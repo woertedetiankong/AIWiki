@@ -57,17 +57,66 @@ describe("large repo eval", () => {
     expect(result.passed).toBe(true);
     expect(result.markdown).toContain("Status: PASS");
     expect(result.markdown).toContain("Guard checks: 1/1 pass");
+    expect(result.markdown).toContain("Guard target existence: PASS");
+    expect(result.markdown).toContain("Guard target sparse coverage: PASS");
     expect(result.markdown).not.toContain("### Guard:");
     expect(result.fixtures[0]).toMatchObject({
       name: "local-python",
       primeInitialized: false,
       codexInitialized: false,
-      passed: true
+      passed: true,
+      missingGuardTargets: [],
+      guardTargetsOutsideSparsePaths: []
     });
     expect(result.fixtures[0]?.guardTargets).toContain("app/routes.py");
+    expect(result.fixtures[0]?.guardTargetChecks).toContainEqual({
+      file: "app/routes.py",
+      exists: true,
+      coveredBySparsePath: true
+    });
     expect(result.fixtures[0]?.guardChecks[0]?.changeRisks.join("\n")).toContain(
       "Python web/API boundary change"
     );
+  });
+
+  it("fails when guard coverage points outside the sparse checkout", async () => {
+    const sourceDir = await tempProject();
+    await mkdir(path.join(sourceDir, "app"), { recursive: true });
+    await writeFile(path.join(sourceDir, "pyproject.toml"), "[project]\nname = 'demo'\n", "utf8");
+    await writeFile(
+      path.join(sourceDir, "app", "routes.py"),
+      "import subprocess\n@app.route('/run')\ndef run(): subprocess.run(['echo'])\n",
+      "utf8"
+    );
+    await initGitProject(sourceDir);
+
+    const result = await runLargeRepoEval({
+      cacheDir: path.join(await tempProject(), "cache"),
+      fixtures: [
+        {
+          name: "local-python-missing-sparse-path",
+          repoUrl: sourceDir,
+          sparsePaths: ["pyproject.toml"],
+          task: "assess a representative Python web change",
+          guardChecks: [
+            {
+              file: "app/routes.py",
+              expectedRiskIncludes: ["Python web/API boundary change"]
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(result.passed).toBe(false);
+    expect(result.markdown).toContain("Status: FAIL");
+    expect(result.fixtures[0]?.guardChecks[0]).toMatchObject({
+      file: "app/routes.py",
+      exists: false,
+      coveredBySparsePath: false,
+      passed: false
+    });
+    expect(result.fixtures[0]?.errors.join("\n")).toContain("app/routes.py");
   });
 
   it("rejects unknown fixture filters before cloning", async () => {

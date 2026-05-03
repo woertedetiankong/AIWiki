@@ -187,8 +187,13 @@ async function prepareAgentWorkflow(
   options: {
     task?: boolean;
     map?: boolean;
+    readOnly?: boolean;
   }
 ): Promise<void> {
+  if (options.readOnly) {
+    return;
+  }
+
   if (options.task !== false) {
     await ensureActiveTask(rootDir, task, { assignee: "codex" });
   }
@@ -207,6 +212,7 @@ async function writeAgentContext(
     format?: string;
     task?: boolean;
     map?: boolean;
+    readOnly?: boolean;
   }
 ): Promise<void> {
   await prepareAgentWorkflow(process.cwd(), task, options);
@@ -215,6 +221,7 @@ async function writeAgentContext(
     limit: parsePositiveInteger(options.limit),
     withGraphify: options.withGraphify,
     architectureGuard: options.architectureGuard,
+    readOnly: options.readOnly,
     format
   });
 
@@ -231,6 +238,7 @@ async function writeRunbook(
     format?: string;
     task?: boolean;
     map?: boolean;
+    readOnly?: boolean;
   }
 ): Promise<void> {
   await prepareAgentWorkflow(process.cwd(), task, options);
@@ -240,6 +248,7 @@ async function writeRunbook(
     withGraphify: options.withGraphify,
     architectureGuard: options.architectureGuard,
     team: options.team,
+    readOnly: options.readOnly,
     format
   });
 
@@ -333,6 +342,7 @@ program
   .option("--with-graphify", "Include graphify-out structural context when available", false)
   .option("--architecture-guard", "Include explicit architecture guard signals", false)
   .option("--team", "Include a team-aware runbook for Codex-managed agent teams", false)
+  .option("--read-only", "Do not start tasks or bootstrap project-map; context lookup only", false)
   .option("--no-task", "Do not start or claim an active AIWiki task")
   .option("--no-map", "Do not bootstrap .aiwiki/wiki/project-map.md")
   .option("--format <format>", "Output format: markdown or json", "markdown")
@@ -344,6 +354,7 @@ program
         withGraphify?: boolean;
         architectureGuard?: boolean;
         team?: boolean;
+        readOnly?: boolean;
         task?: boolean;
         map?: boolean;
         format?: string;
@@ -362,6 +373,7 @@ program
   .option("--architecture-guard", "Include explicit architecture guard signals", false)
   .option("--runbook", "Generate the full Codex-style runbook instead of compact context", false)
   .option("--team", "Include a team-aware runbook; implies --runbook", false)
+  .option("--read-only", "Do not start tasks or bootstrap project-map; context lookup only", false)
   .option("--no-task", "Do not start or claim an active AIWiki task")
   .option("--no-map", "Do not bootstrap .aiwiki/wiki/project-map.md")
   .option("--format <format>", "Output format: markdown or json", "markdown")
@@ -374,6 +386,7 @@ program
         architectureGuard?: boolean;
         runbook?: boolean;
         team?: boolean;
+        readOnly?: boolean;
         task?: boolean;
         map?: boolean;
         format?: string;
@@ -835,7 +848,8 @@ program
       const plan = await readWikiUpdatePlanFile(process.cwd(), planPath);
       const result = await applyWikiUpdatePlan(process.cwd(), plan, {
         confirm: options.confirm,
-        rebuildGraph: options.graph
+        rebuildGraph: options.graph,
+        previewStateKey: planPath
       });
 
       process.stdout.write(format === "json" ? result.json : result.markdown);

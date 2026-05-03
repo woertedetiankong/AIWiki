@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import { generateAgentContext } from "./agent.js";
 import type { AgentContextOptions } from "./agent.js";
@@ -15,6 +15,7 @@ const execFileAsync = promisify(execFile);
 export interface CodexRunbookOptions extends AgentContextOptions {
   format?: OutputFormat;
   team?: boolean;
+  readOnly?: boolean;
 }
 
 export type CodexTeamRoleName = "Implementer" | "Reviewer" | "Memory Steward";
@@ -132,21 +133,52 @@ async function trackedFilesFromGit(rootDir: string): Promise<string[]> {
 
 async function representativeGuardTargetsFromGit(rootDir: string): Promise<string[]> {
   const files = await trackedFilesFromGit(rootDir);
-  const candidates = representativeRiskFiles(files, 80);
+  const existingFiles: string[] = [];
+  for (const file of files) {
+    try {
+      if ((await stat(resolveProjectPath(rootDir, file))).isFile()) {
+        existingFiles.push(file);
+      }
+    } catch {
+      // Sparse checkouts can list paths whose blobs are intentionally absent.
+    }
+  }
+
+  const candidates = representativeRiskFiles(existingFiles, 80);
+  const readableCandidates: string[] = [];
   const riskyTargets: string[] = [];
 
   for (const candidate of candidates) {
     try {
       const content = await readFile(resolveProjectPath(rootDir, candidate), "utf8");
+      readableCandidates.push(candidate);
       if (semanticChangeRiskMessages({ filePath: candidate, content, files }).length > 0) {
         riskyTargets.push(candidate);
       }
     } catch {
-      // Skip unreadable candidates; the path-only fallback below can still suggest safe next targets.
+      // Unreadable paths should not be suggested as guard targets.
     }
   }
 
-  return unique([...riskyTargets, ...candidates]).slice(0, 5);
+  return unique([...riskyTargets, ...readableCandidates]).slice(0, 5);
+}
+
+async function existingGuardTargets(
+  rootDir: string,
+  targets: string[]
+): Promise<string[]> {
+  const existing: string[] = [];
+  for (const target of unique(targets)) {
+    try {
+      if ((await stat(resolveProjectPath(rootDir, target))).isFile()) {
+        existing.push(target);
+      }
+    } catch {
+      // Stale memory can reference files that no longer exist; do not turn those into guard commands.
+    }
+  }
+
+  return existing;
 }
 
 export function formatCodexRunbookMarkdown(runbook: CodexRunbook): string {
@@ -172,7 +204,12 @@ function codexRunbookToJson(runbook: CodexRunbook): string {
   return `${JSON.stringify(runbook, null, 2)}\n`;
 }
 
-function createTeamRunbook(task: string, initialized: boolean): CodexTeamRunbook {
+function createTeamRunbook(
+  task: string,
+  initialized: boolean,
+  readOnly: boolean
+): CodexTeamRunbook {
+  const agentCommand = `aiwiki agent ${shellQuote(task)}${readOnly ? " --read-only" : ""}`;
   return {
     enabled: true,
     roles: [
@@ -182,13 +219,17 @@ function createTeamRunbook(task: string, initialized: boolean): CodexTeamRunbook
         commands: [
           "Translate the user's natural-language request into current scope and likely files.",
           "Run `aiwiki prime`.",
-          initialized
+          readOnly
+            ? "Read-only mode: skip task ready, task claim, and project-map bootstrapping commands."
+            : initialized
             ? "Run `aiwiki task ready --format json` and claim ready work when the user wants task-graph coordination."
             : "If prime reports cold-start mode, skip task graph commands until after `aiwiki init` and `aiwiki map --write`.",
-          initialized
+          readOnly
+            ? "Use read-only agent context for handoff; do not claim or mutate task state."
+            : initialized
             ? "Run `aiwiki task claim <id>` only for unblocked work unless the user explicitly approves `--force`."
             : "Use cold-start `aiwiki agent` and `aiwiki guard` output instead of claiming tasks.",
-          `Run \`aiwiki agent ${shellQuote(task)}\`.`,
+          `Run \`${agentCommand}\`.`,
           "Run `aiwiki guard <file>` before editing.",
           "Make the smallest safe implementation.",
           "Run focused tests."
@@ -263,15 +304,16 @@ export async function generateCodexRunbook(
   const initialized = await isAIWikiInitialized(rootDir);
   const dirtyGuardTargets = await changedGuardTargetsFromGitStatus(rootDir);
   const representativeGuardTargets = await representativeGuardTargetsFromGit(rootDir);
-  const guardTargets = unique([
+  const guardTargets = (await existingGuardTargets(rootDir, [
     ...dirtyGuardTargets,
     ...agent.context.guardTargets,
     ...representativeGuardTargets
-  ]).slice(0, 5);
+  ])).slice(0, 5);
   const planPath = `.aiwiki/context-packs/${taskSlug(task)}-reflect-plan.json`;
+  const agentCommand = `aiwiki agent ${shellQuote(task)}${options.readOnly ? " --read-only" : ""}`;
   const start = [
     "aiwiki prime",
-    `aiwiki agent ${shellQuote(task)}`,
+    agentCommand,
     guardTargets.length > 0
       ? `aiwiki guard ${guardTargets[0]}`
       : "aiwiki brief \"<task>\" --read-only"
@@ -294,7 +336,9 @@ export async function generateCodexRunbook(
         "Run `aiwiki init --project-name <name>` and `aiwiki map --write` before creating durable memory update plans.",
         "Do not run apply --confirm unless the user explicitly approves the candidate memory."
   ];
-  const team = options.team ? createTeamRunbook(task, initialized) : undefined;
+  const team = options.team
+    ? createTeamRunbook(task, initialized, options.readOnly ?? false)
+    : undefined;
 
   const runbook: CodexRunbook = {
     task,
@@ -315,6 +359,9 @@ export async function generateCodexRunbook(
           "The user only needs to describe the requirement; Codex is responsible for using AIWiki.",
           "Do not ask the user to choose AIWiki commands; translate the request into the right local memory, guard, checkpoint, and reflect steps.",
           "Use AIWiki before editing, before risky file changes, and after implementation.",
+          options.readOnly
+            ? "Read-only agent mode does not create or claim tasks and does not bootstrap the project map."
+            : "Default agent mode may prepare Codex-owned task state and a project map before returning context.",
           "Never confirm long-term memory writes without explicit user approval."
         ]
       },
@@ -324,7 +371,13 @@ export async function generateCodexRunbook(
       },
       {
         title: "Work Graph",
-        items: initialized
+        items: options.readOnly
+          ? [
+              "Read-only mode skips task creation, task claiming, and project-map bootstrapping.",
+              "Use this output for context lookup only; run agent without `--read-only` when Codex should prepare workflow state.",
+              "Resume files are also write-protected when `aiwiki resume --read-only` is used."
+            ]
+          : initialized
           ? [
               "Use `aiwiki task ready` to see unblocked open work.",
               "Use `aiwiki task claim <id>` to claim ready work; blocked tasks require explicit `--force`.",

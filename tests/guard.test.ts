@@ -128,8 +128,17 @@ describe("generateFileGuardrails", () => {
     expect(result.markdown).toContain("Stripe webhook raw body");
     expect(result.markdown).toContain("Keep Stripe secrets server-side");
     expect(result.markdown).toContain("Use Stripe webhook route");
+    expect(result.markdown).toContain("## Memory Coverage");
+    expect(result.markdown).toContain("file-specific AIWiki page(s)");
+    expect(result.markdown).toContain("contextual page(s) from path search");
     expect(result.guardrails.matchedDocs).toContain(
       "wiki/pitfalls/stripe-raw-body.md"
+    );
+    expect(result.guardrails.exactMatchedDocs).toContain(
+      "wiki/pitfalls/stripe-raw-body.md"
+    );
+    expect(result.guardrails.contextualDocs).toContain(
+      "wiki/rules/stripe-secrets.md"
     );
   });
 
@@ -156,9 +165,19 @@ describe("generateFileGuardrails", () => {
     const result = await generateFileGuardrails(rootDir, "src/unknown.ts");
 
     expect(result.guardrails.matchedDocs).toEqual([]);
+    expect(result.markdown).toContain("## Memory Coverage");
+    expect(result.markdown).toContain(
+      "No file-specific AIWiki memory matched this new or missing file."
+    );
+    expect(result.markdown).toContain(
+      "Do not infer project-specific constraints for src/unknown.ts from empty AIWiki matches."
+    );
+    expect(result.markdown).not.toContain(
+      "Do not edit src/unknown.ts before reviewing matched rules and pitfalls."
+    );
     expect(result.markdown).toContain("No related modules found.");
     expect(result.markdown).toContain("No matching rules found.");
-    expect(result.markdown).toContain("No stale wiki memory warnings for matched context.");
+    expect(result.markdown).toContain("No matched AIWiki pages to check for staleness.");
     expect(result.markdown).toContain("wiki/files/src-unknown.md");
   });
 
@@ -209,6 +228,7 @@ describe("generateFileGuardrails", () => {
     };
 
     expect(result.markdown).toContain("npm run test -- tests/brief.test.ts");
+    expect(result.markdown).toContain("No file-specific AIWiki memory matched this file.");
     expect(result.markdown).toContain("## File Signals");
     expect(parsed.suggestedTests.join("\n")).toContain("tests/brief.test.ts");
     expect(parsed.fileSignals).toMatchObject({ exists: true, lines: 2 });

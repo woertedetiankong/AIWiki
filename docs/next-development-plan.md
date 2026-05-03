@@ -2,7 +2,7 @@
 
 Status: Working plan based on local dogfood feedback.
 Date: 2026-04-29
-Last reviewed: 2026-05-02
+Last reviewed: 2026-05-03
 
 This document turns recent AI coding-agent feedback into an implementation
 roadmap. It is intentionally narrower than `SPEC-FUTURE.md`: the goal is to make
@@ -11,9 +11,10 @@ systems.
 
 ## Release Baseline
 
-AIWiki is now published on npm as `@superwoererte/aiwiki@0.1.0`. The package is
-scoped because npm blocks the unscoped `aiwiki` name as too similar to
-`ai-wiki`; the installed binary remains `aiwiki`.
+AIWiki is published on npm as `@superwoererte/aiwiki`. The package is scoped
+because npm blocks the unscoped `aiwiki` name as too similar to `ai-wiki`; the
+installed binary remains `aiwiki`. The first published version was `0.1.0`; the
+source checkout is preparing the next hardened CLI iteration.
 
 The 2026-05-02 release smoke baseline passed for macOS, Windows, and Linux
 across Node.js 20, 22, and 24. Registry smoke also passed from a clean directory
@@ -131,23 +132,28 @@ Follow-up acceptance criteria:
 
 ## Priority 2: Improve Chinese and Unicode Retrieval
 
-Chinese tasks currently lose most search value because the tokenizer only keeps
-ASCII-style tokens. This makes `aiwiki search "编码 工作流"` return no useful
-results even when the user is asking a meaningful question.
+Status: completed first slice on 2026-05-03.
 
-Planned work:
+The basic tokenizer and search path now preserve path-friendly English tokens
+while supporting Unicode and CJK queries. `search --index` also uses the derived
+SQLite FTS table with BM25 ranking, then preserves Markdown-style recall by
+scoring all indexed pages instead of trusting only the FTS hits.
 
-- replace the current search tokenizer with a Unicode-aware tokenizer;
-- preserve path-friendly tokens for source files;
-- add simple CJK matching, likely character bigrams or substring fallback;
-- add tests for Chinese titles, Chinese body text, and mixed Chinese/English
-  file references.
+Implemented behavior:
 
-Acceptance criteria:
+- Unicode-aware query tokenization.
+- CJK run and bigram matching for Chinese maintenance and workflow queries.
+- Chinese synonym expansion for common AIWiki maintenance concepts.
+- SQLite FTS/BM25 ranking for indexed search.
+- Markdown fallback when the derived SQLite index is stale, corrupt, missing, or
+  FTS-drifted.
 
-- Chinese queries can match Chinese wiki page titles and bodies.
-- Mixed queries such as `Codex 编码 工作流` still match English source references.
-- Existing English/path search tests continue to pass.
+Remaining planned work:
+
+- Broaden real-project Chinese dogfood beyond the current tokenizer and fixture
+  tests.
+- Tune synonym coverage only when repeated user language shows a durable pattern.
+- Keep mixed Chinese/English queries useful without overfitting to this repo.
 
 ## Priority 3: Reduce Architecture Audit Noise
 
@@ -195,11 +201,14 @@ Implemented behavior:
 - prints the next 2-3 commands, not the entire command surface;
 - keeps context lookup read-only, while the CLI entry point owns lightweight
   task/project-map preparation for Codex.
+- supports `--read-only` so Codex can gather agent or runbook context without
+  task or project-map writes;
 - `prime` summarizes active work, ready work, memory health, and next commands.
 - `schema` exposes machine-readable task/event/prime contracts.
 - generated commands shell-quote task text safely;
 - dirty working-tree guard targets are ranked so source files surface before
   low-signal docs, package metadata, and runtime artifacts;
+- generated runbook guard targets are filtered to existing project files;
 - `agent --runbook --team` is written as a Codex operator checklist, not a human
   command manual.
 
@@ -211,7 +220,7 @@ Acceptance criteria:
 
 ## Priority 5: Make Guardrails More Specific
 
-Status: second slice implemented.
+Status: third slice implemented.
 
 `guard` now helps sparse-memory projects by suggesting nearby tests, reporting
 file signals, recommending file notes only for useful targets, and surfacing
@@ -221,6 +230,10 @@ The 2026-05-03 usability pass fixed a clear trust issue: generic payment or
 webhook advisory strings in non-payment files no longer trigger the
 money/payment semantic risk warning, while payment paths and amount/currency
 handling code are still guarded.
+
+The 2026-05-03 maturity pass also added `Memory Coverage` to `guard`, tightened
+runbook guard target existence checks, and made the large-repo eval fail when a
+target is missing from or outside a sparse checkout.
 
 Remaining planned work:
 
@@ -272,7 +285,8 @@ lesson.
 Remaining planned work:
 
 - improve generated append text when a refresh candidate is too generic;
-- keep the result preview-first through `apply`;
+- keep the result preview-first through `apply`, whose confirmation now requires
+  a fresh preview hash;
 - avoid promoting one-off implementation details into rules.
 
 Acceptance criteria:
@@ -299,13 +313,16 @@ Markdown CLI dependable.
 
 ## Suggested Implementation Order
 
-1. Fix Unicode and Chinese retrieval.
-2. Tune `architecture audit` findings and add line-level evidence.
-3. Continue improving `guard` related-file and semantic-risk precision from
+1. Tune `architecture audit` findings and add line-level evidence.
+2. Broaden real-project Chinese/Unicode retrieval dogfood beyond tokenizer and
+   index basics.
+3. Review the current doctor rule-promotion candidates before turning repeated
+   pitfalls into active rules.
+4. Continue improving `guard` related-file and semantic-risk precision from
    real-project dogfood.
-4. Improve Windows/dev command ergonomics only when dogfood reveals a concrete
+5. Improve Windows/dev command ergonomics only when dogfood reveals a concrete
    copy-paste failure.
-5. Keep `reflect --from-git-diff` candidate specificity under the usability and
+6. Keep `reflect --from-git-diff` candidate specificity under the usability and
    dogfood loop instead of adding broad memory automation.
 
 ## Verification Checklist
@@ -325,6 +342,8 @@ aiwiki brief "<task>" --read-only
 aiwiki guard <changed-file>
 aiwiki reflect --from-git-diff --read-only
 aiwiki eval usability
+aiwiki eval large-repos --skip-clone
+aiwiki doctor
 ```
 
 The work is not done if the output is technically correct but too noisy for a

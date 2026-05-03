@@ -50,7 +50,9 @@ describe("generateAgentContext", () => {
 
     expect(result.markdown).toContain("# AIWiki Agent Context");
     expect(result.markdown).toContain("Codex chooses the AIWiki commands");
-    expect(result.markdown).toContain("Context lookup is read-only");
+    expect(result.markdown).toContain("## Mode Boundary");
+    expect(result.markdown).toContain("Default workflow mode");
+    expect(result.markdown).toContain("Context lookup does not confirm long-term memory writes");
     expect(parsed.guardTargets).toContain("src/brief.ts");
     expect(parsed.nextCommands.join("\n")).toContain("aiwiki guard src/brief.ts");
     expect(await readFile(path.join(rootDir, ".aiwiki", "log.md"), "utf8")).toBe(initialLog);
@@ -89,7 +91,32 @@ describe("generateAgentContext", () => {
     );
 
     expect(stdout).toContain("# AIWiki Agent Context");
+    expect(stdout).toContain("Default workflow mode");
     expect(stdout).toContain("aiwiki guard src/brief.ts");
+  });
+
+  it("exposes compact agent read-only mode through the CLI", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addAgentMemory(rootDir);
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", tsxLoader, cliPath, "agent", "read only context", "--read-only"],
+      { cwd: rootDir }
+    );
+
+    expect(stdout).toContain("Read-only mode");
+    await expect(
+      readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")
+    ).rejects.toThrow();
+    await expect(
+      readFile(path.join(rootDir, ".aiwiki", "wiki", "project-map.md"), "utf8")
+    ).rejects.toThrow();
   });
 
   it("exposes runbook mode through the agent command", async () => {
@@ -117,6 +144,30 @@ describe("generateAgentContext", () => {
     expect(
       await readFile(path.join(rootDir, ".aiwiki", "wiki", "project-map.md"), "utf8")
     ).toContain("# Project Map");
+  });
+
+  it("keeps agent runbook read-only when requested", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addAgentMemory(rootDir);
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--import", tsxLoader, cliPath, "agent", "read only runbook", "--runbook", "--read-only"],
+      { cwd: rootDir }
+    );
+
+    expect(stdout).toContain("Read-only agent mode");
+    await expect(
+      readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")
+    ).rejects.toThrow();
+    await expect(
+      readFile(path.join(rootDir, ".aiwiki", "wiki", "project-map.md"), "utf8")
+    ).rejects.toThrow();
   });
 
   it("exposes team runbook mode through the agent command", async () => {

@@ -8,6 +8,9 @@ This handoff was originally written on 2026-05-02 as the plan for improving
 AIWiki as a Codex-owned workflow. The planned slice has now been implemented and
 verified.
 
+Later 2026-05-03 product hardening is captured in
+`docs/session-handoff-2026-05-03-aiwiki-mature-workflow-hardening.md`.
+
 The product model to preserve is:
 
 ```text
@@ -241,12 +244,13 @@ The reflect/apply preview did not confirm durable wiki memory. Long-term
 
 ## Remaining Work
 
-Good next implementation targets:
+Good next implementation targets after the 2026-05-03 hardening slice:
 
-1. Improve Chinese/Unicode retrieval for `search`, `brief`, and `guard`.
-2. Tune `architecture audit` line-level evidence and false-positive severity.
-3. Continue real-project dogfood when changing ranking, scan heuristics, or
-   Codex-owned workflow output.
+1. Tune `architecture audit` line-level evidence and false-positive severity.
+2. Broaden real-project Chinese/Unicode retrieval dogfood beyond tokenizer and
+   indexed-search basics.
+3. Review doctor rule-promotion candidates before turning repeated pitfalls into
+   active rules.
 4. Keep improving `reflect --from-git-diff` specificity only when dogfood reveals
    generic candidate text.
 

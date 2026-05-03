@@ -46,7 +46,7 @@ Important boundary:
   explicitly writes to a user-provided project-local output path.
 - Command write semantics are explicit:
   - Read-only commands or `--read-only` mode MUST NOT write any files.
-  - Preview-only commands MUST NOT write long-term wiki memory, but MAY write runtime log/eval
+  - Preview-only commands MUST NOT write long-term wiki memory, but MAY write runtime log/eval/cache
     records unless `--read-only` is provided.
   - Confirmed writes MUST require an explicit confirmation flag or command path.
 
@@ -499,8 +499,8 @@ Usage:
 
 ```bash
 aiwiki agent "<task>" [--runbook] [--team] [--no-task] [--no-map]
-                    [--limit <n>] [--with-graphify] [--architecture-guard]
-                    [--format markdown|json]
+                    [--read-only] [--limit <n>] [--with-graphify]
+                    [--architecture-guard] [--format markdown|json]
 ```
 
 Behavior:
@@ -513,9 +513,15 @@ Behavior:
 - MUST support `--no-task` to skip automatic task start/claim.
 - MUST write `.aiwiki/wiki/project-map.md` by default when the project map is missing.
 - MUST support `--no-map` to skip project-map bootstrap.
+- MUST support `--read-only` to skip task start/claim and project-map bootstrap writes while still
+  returning agent context.
+- Markdown output MUST include a mode boundary that distinguishes context-only mode from workflow
+  state preparation.
 - Generated commands in Markdown output MUST shell-quote task text safely.
 - Guard targets SHOULD prefer changed source files over low-signal docs, package metadata, and
   runtime artifacts when many dirty files exist.
+- Generated guard target commands MUST reference existing project files when targets are inferred
+  from task state, the working tree, or runbook context.
 - MUST keep `aiwiki codex "<task>"` as a hidden compatibility alias for
   `aiwiki agent "<task>" --runbook`.
 
@@ -524,18 +530,48 @@ Behavior:
 Usage:
 
 ```bash
-aiwiki search "<query>" [--type <type>] [--limit <n>] [--format markdown|json]
+aiwiki search "<query>" [--type <type>] [--limit <n>] [--index]
+                 [--format markdown|json]
 ```
 
 Behavior:
 
 - MUST scan `.aiwiki/wiki/`.
-- MUST tokenize the query.
+- MUST tokenize path-friendly English terms, Unicode text, and CJK query text.
 - MUST score matches across title, frontmatter, path, and body.
 - MUST add priority for severity and encountered count.
 - MUST penalize deprecated pages.
 - MUST support filtering by wiki page type.
+- With `--index`, MUST use the derived SQLite index only when it is fresh.
+- Indexed search MUST use the SQLite FTS table with BM25 ranking when the FTS query matches.
+- Indexed search MUST preserve Markdown-style substring recall by scoring all indexed page content,
+  not only rows returned by the FTS query.
+- Indexed search MUST automatically fall back to Markdown scanning when the index is missing,
+  stale, corrupt, or the FTS table drifts from `wiki_pages`.
+- Markdown and JSON output SHOULD expose whether results came from Markdown or SQLite and include
+  index freshness status when `--index` is requested.
 - MUST return an empty result set for empty query tokens or no matches.
+
+### 6.2a `aiwiki index`
+
+Usage:
+
+```bash
+aiwiki index build [--no-jsonl] [--format markdown|json]
+aiwiki index status [--format markdown|json]
+```
+
+Behavior:
+
+- MUST build a derived SQLite index under `.aiwiki/cache/index.sqlite`.
+- MUST build a JSONL snapshot under `.aiwiki/snapshots/wiki-pages.jsonl` unless `--no-jsonl` is
+  provided.
+- MUST keep Markdown under `.aiwiki/wiki/` as the source of truth.
+- MUST populate and query a SQLite FTS table for local BM25 ranking.
+- `index status` MUST compare indexed page rows and FTS rows back to current Markdown pages.
+- `index status` MUST report stale, missing, extra, corrupt, or FTS-drifted index state without
+  modifying wiki memory.
+- A stale or corrupt derived index MUST be rebuildable with `aiwiki index build`.
 
 ### 6.3 `aiwiki brief`
 
@@ -552,6 +588,10 @@ Behavior:
 - MUST generate a no-LLM Development Brief from AIWiki memory.
 - MUST read `.aiwiki/index.md` when available.
 - MUST search wiki memory for task-relevant pages.
+- MUST place high-confidence selected memory in `Must Read`.
+- MUST place lower-confidence recall in `Memory Hints`, not in `Must Read`.
+- MUST include `Memory Coverage` that explains whether retrieved memory is target-specific,
+  contextual, sparse, or only built-in generic guardrails.
 - MUST include selected docs.
 - MUST include advisory staleness warnings when selected wiki memory references missing project
   files or files changed after the page's `last_updated` value.
@@ -565,24 +605,18 @@ Behavior:
   route/controller boundary guidance.
 - `--architecture-guard` MUST NOT automatically refactor code or block the user's task.
 - MUST include sections for:
-  - Task
-  - Goal
-  - Product Questions to Confirm
-  - Recommended Direction
-  - Architecture Boundaries
-  - Hardcoding and Configuration Risks
-  - Portability Checklist
-  - Module Memory to Maintain
+  - Must Read
+  - Do Not
+  - Memory Coverage
+  - Memory Hints when low-confidence recall exists
+  - Rules
+  - Pitfalls
+  - Staleness Warnings when applicable
+  - Suggested Tests
+  - Built-In Generic Guardrails
+  - Other Context when relevant
   - Architecture Guard when `--architecture-guard` is provided
   - Graphify Structural Context when `--with-graphify` is provided
-  - Relevant Modules
-  - Relevant Project Memory
-  - Known Pitfalls
-  - Project Rules and Constraints
-  - High-Risk Files
-  - Suggested Must-Read Files
-  - Acceptance Criteria
-  - Notes for Codex
 - MUST append an eval case to `.aiwiki/evals/brief-cases.jsonl` unless `--read-only` is provided.
 - MUST append a log entry unless `--read-only` is provided.
 - `--read-only` MUST NOT write log entries, eval cases, or output files.
@@ -605,6 +639,8 @@ Behavior:
 - MUST normalize target paths to project-local POSIX-style paths.
 - MUST find exact wiki pages that reference the file.
 - MUST also search by meaningful path tokens.
+- MUST include `Memory Coverage` so sparse or file-specific memory is explicit before editing.
+- MUST NOT present low-confidence contextual recall as a critical file-specific rule.
 - MUST include advisory staleness warnings when matched wiki memory references missing project
   files or files changed after the page's `last_updated` value.
 - Markdown output MUST show at most three staleness warnings and point to JSON for full details
@@ -630,6 +666,7 @@ Behavior:
 - MUST sort high-severity memory before lower-severity memory.
 - MUST include sections for:
   - Do Not
+  - Memory Coverage
   - Related Modules
   - Critical Rules
   - Known Pitfalls
@@ -760,12 +797,15 @@ Behavior:
   - `rule`
 - MUST derive safe kebab-case slugs when not provided.
 - MUST preview operations by default.
-- Markdown preview MUST explain what the plan is, that the preview has not written files, and what
-  the user should confirm before passing `--confirm`.
+- Markdown preview MUST explain what the plan is, that the preview has not written wiki pages, and
+  what the user should confirm before passing `--confirm`.
 - Markdown preview MUST separate planned create/append/skip counts from already-applied results.
 - Markdown preview MUST include a plain-language summary of each candidate memory item before the
   technical operation details.
+- Preview mode MUST record freshness state for confirmation under `.aiwiki/cache/apply-previews`.
 - MUST write only when `--confirm` is provided.
+- Confirmed writes MUST require a fresh preview for the same plan.
+- Confirmed writes MUST reject append operations when the target page changed after preview.
 - MUST skip existing pages unless append sections are explicitly provided.
 - Confirmed append operations MUST update the target page `last_updated` value.
 - MUST update `.aiwiki/index.md` after confirmed writes.
@@ -1076,6 +1116,8 @@ Behavior:
 - MUST generate a resume brief derived from `checkpoints.jsonl`.
 - MUST begin the brief body with a clear next action so a fresh agent can continue before reading
   the full history.
+- MUST include a mode boundary that tells the next agent whether the command wrote a resume file or
+  ran in read-only context mode.
 - MUST include completed work, in-progress work, not-started work, decisions, blockers, changed
   files, tests, and next recommended steps.
 - MUST remind the next agent not to restart from scratch.
@@ -1131,6 +1173,8 @@ Behavior:
 - MUST support `--skip-clone` so CI or local runs can require pre-existing cached checkouts.
 - MUST run `prime`, `codex --team`, and representative `guard` checks against each fixture.
 - MUST fail the command with a non-zero exit code when expected language risk signals disappear.
+- MUST fail when generated guard targets do not exist in the sparse checkout.
+- MUST fail when generated guard targets are outside the fixture sparse paths.
 - SHOULD include Python, Java, TypeScript, JavaScript, and C fixtures.
 - MUST NOT write `.aiwiki/` memory into the evaluated repository fixtures.
 
@@ -1224,13 +1268,14 @@ Commands MUST reject writes outside the project root unless explicitly specified
 
 Potentially destructive or long-term memory-changing operations MUST be preview-first.
 
-Preview-first is not identical to read-only. A preview command MAY write runtime telemetry or
-workflow records such as `.aiwiki/log.md` or `.aiwiki/evals/*.jsonl`. When a command supports
-`--read-only`, that mode MUST suppress all filesystem writes for that command.
+Preview-first is not identical to read-only. A preview command MAY write runtime telemetry,
+workflow records, or preview-state caches such as `.aiwiki/log.md`, `.aiwiki/evals/*.jsonl`, and
+`.aiwiki/cache/apply-previews/*.json`. When a command supports `--read-only`, that mode MUST
+suppress all filesystem writes for that command.
 
 Examples:
 
-- `apply` previews by default.
+- `apply` previews by default and confirmed apply requires a fresh matching preview.
 - `reflect` previews by default.
 - `ingest` preserves raw notes and previews structured suggestions.
 - rule promotion previews candidates by default.

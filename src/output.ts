@@ -35,6 +35,7 @@ function serializeSearchResult(result: SearchResult): Record<string, unknown> {
   return {
     title: result.title,
     score: result.score,
+    bm25: result.bm25,
     matchedFields: result.matchedFields,
     path: result.page.relativePath,
     excerpt: result.excerpt,
@@ -133,6 +134,10 @@ function formatSearchIndexStatusLines(response: SearchResponse): string[] {
         ? "Refresh with `aiwiki index build`."
         : "Initialize with `aiwiki init --project-name <name>` and `aiwiki map --write` before building the index."
     );
+  }
+
+  if (status.error) {
+    lines.push(`Index error: ${status.error}`);
   }
 
   return lines;

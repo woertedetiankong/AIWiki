@@ -35,8 +35,16 @@ export interface LargeRepoGuardCheckResult {
   file: string;
   changeRisks: string[];
   expectedRiskIncludes: string[];
+  exists: boolean;
+  coveredBySparsePath: boolean;
   passed: boolean;
   missing: string[];
+}
+
+export interface LargeRepoGuardTargetCheck {
+  file: string;
+  exists: boolean;
+  coveredBySparsePath: boolean;
 }
 
 export interface LargeRepoFixtureResult {
@@ -47,6 +55,9 @@ export interface LargeRepoFixtureResult {
   primeInitialized: boolean;
   codexInitialized: boolean;
   guardTargets: string[];
+  guardTargetChecks: LargeRepoGuardTargetCheck[];
+  missingGuardTargets: string[];
+  guardTargetsOutsideSparsePaths: string[];
   guardChecks: LargeRepoGuardCheckResult[];
   errors: string[];
 }
@@ -169,6 +180,33 @@ function sparsePattern(filePath: string): string {
   return `/${filePath.replace(/^\/+/u, "")}`;
 }
 
+function normalizeRepoPath(filePath: string): string {
+  return filePath.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/^\.\//u, "");
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.*]/gu, "\\$&");
+}
+
+function sparsePathCoversFile(sparsePath: string, filePath: string): boolean {
+  const normalizedSparsePath = normalizeRepoPath(sparsePath);
+  const normalizedFilePath = normalizeRepoPath(filePath);
+
+  if (normalizedSparsePath.includes("*")) {
+    const pattern = `^${escapeRegex(normalizedSparsePath).replace(/\\\*/gu, ".*")}$`;
+    return new RegExp(pattern, "u").test(normalizedFilePath);
+  }
+
+  return normalizedFilePath === normalizedSparsePath ||
+    normalizedFilePath.startsWith(`${normalizedSparsePath}/`);
+}
+
+function isCoveredBySparsePaths(fixture: LargeRepoFixture, filePath: string): boolean {
+  return fixture.sparsePaths.some((sparsePath) =>
+    sparsePathCoversFile(sparsePath, filePath)
+  );
+}
+
 async function ensureSparseCheckout(
   fixture: LargeRepoFixture,
   cacheDir: string,
@@ -230,20 +268,41 @@ function filterFixtures(fixtures: LargeRepoFixture[], fixtureNames: string[] | u
 
 async function evaluateGuardCheck(
   repoDir: string,
+  fixture: LargeRepoFixture,
   check: LargeRepoGuardCheck
 ): Promise<LargeRepoGuardCheckResult> {
-  const guard = await generateFileGuardrails(repoDir, check.file);
+  const exists = await pathExists(path.join(repoDir, normalizeRepoPath(check.file)));
+  const coveredBySparsePath = isCoveredBySparsePaths(fixture, check.file);
+  const guard = exists
+    ? await generateFileGuardrails(repoDir, check.file)
+    : undefined;
   const missing = check.expectedRiskIncludes.filter((expected) =>
-    !guard.guardrails.changeRisks.some((risk) => risk.includes(expected))
+    !guard?.guardrails.changeRisks.some((risk) => risk.includes(expected))
   );
 
   return {
     file: check.file,
-    changeRisks: guard.guardrails.changeRisks,
+    changeRisks: guard?.guardrails.changeRisks ?? [],
     expectedRiskIncludes: check.expectedRiskIncludes,
+    exists,
+    coveredBySparsePath,
     missing,
-    passed: missing.length === 0
+    passed: exists && coveredBySparsePath && missing.length === 0
   };
+}
+
+async function evaluateGuardTargets(
+  repoDir: string,
+  fixture: LargeRepoFixture,
+  guardTargets: string[]
+): Promise<LargeRepoGuardTargetCheck[]> {
+  return Promise.all(
+    guardTargets.map(async (file) => ({
+      file,
+      exists: await pathExists(path.join(repoDir, normalizeRepoPath(file))),
+      coveredBySparsePath: isCoveredBySparsePaths(fixture, file)
+    }))
+  );
 }
 
 async function evaluateFixture(
@@ -256,6 +315,9 @@ async function evaluateFixture(
   let primeInitialized = true;
   let codexInitialized = true;
   let guardTargets: string[] = [];
+  let guardTargetChecks: LargeRepoGuardTargetCheck[] = [];
+  let missingGuardTargets: string[] = [];
+  let guardTargetsOutsideSparsePaths: string[] = [];
   let guardChecks: LargeRepoGuardCheckResult[] = [];
 
   try {
@@ -268,8 +330,15 @@ async function evaluateFixture(
     primeInitialized = prime.context.initialized;
     codexInitialized = codex.runbook.initialized;
     guardTargets = codex.runbook.guardTargets;
+    guardTargetChecks = await evaluateGuardTargets(repoDir, fixture, guardTargets);
+    missingGuardTargets = guardTargetChecks
+      .filter((check) => !check.exists)
+      .map((check) => check.file);
+    guardTargetsOutsideSparsePaths = guardTargetChecks
+      .filter((check) => !check.coveredBySparsePath)
+      .map((check) => check.file);
     guardChecks = await Promise.all(
-      fixture.guardChecks.map((check) => evaluateGuardCheck(repoDir, check))
+      fixture.guardChecks.map((check) => evaluateGuardCheck(repoDir, fixture, check))
     );
 
     if (primeInitialized) {
@@ -281,9 +350,20 @@ async function evaluateFixture(
     if (guardTargets.length === 0) {
       errors.push("Expected codex --team to produce at least one guard target.");
     }
+    if (missingGuardTargets.length > 0) {
+      errors.push(`Guard target(s) do not exist in sparse checkout: ${missingGuardTargets.join(", ")}`);
+    }
+    if (guardTargetsOutsideSparsePaths.length > 0) {
+      errors.push(`Guard target(s) are outside fixture sparse paths: ${guardTargetsOutsideSparsePaths.join(", ")}`);
+    }
     for (const check of guardChecks) {
       if (!check.passed) {
-        errors.push(`Guard check failed for ${check.file}; missing: ${check.missing.join(", ")}`);
+        const reasons = [
+          check.exists ? undefined : "file missing",
+          check.coveredBySparsePath ? undefined : "outside sparse paths",
+          check.missing.length > 0 ? `missing: ${check.missing.join(", ")}` : undefined
+        ].filter((reason): reason is string => Boolean(reason));
+        errors.push(`Guard check failed for ${check.file}; ${reasons.join("; ")}`);
       }
     }
   } catch (error) {
@@ -298,6 +378,9 @@ async function evaluateFixture(
     primeInitialized,
     codexInitialized,
     guardTargets,
+    guardTargetChecks,
+    missingGuardTargets,
+    guardTargetsOutsideSparsePaths,
     guardChecks,
     errors
   };
@@ -317,6 +400,8 @@ function formatFixtureMarkdown(result: LargeRepoFixtureResult): string[] {
     `- Guard targets: ${result.guardTargets.length > 0
       ? `${result.guardTargets.length} (${guardTargetSample.join(", ")}${omittedGuardTargets > 0 ? `, +${omittedGuardTargets} more` : ""})`
       : "none"}`,
+    `- Guard target existence: ${result.missingGuardTargets.length === 0 ? "PASS" : `FAIL (${result.missingGuardTargets.join(", ")})`}`,
+    `- Guard target sparse coverage: ${result.guardTargetsOutsideSparsePaths.length === 0 ? "PASS" : `FAIL (${result.guardTargetsOutsideSparsePaths.join(", ")})`}`,
     `- Guard checks: ${passedGuardChecks}/${result.guardChecks.length} pass`
   ];
 

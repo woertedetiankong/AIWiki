@@ -58,7 +58,9 @@ aiwiki brief "refactor payment webhook" --with-graphify --architecture-guard
 
 Briefs compile relevant memory, project map context, architecture boundaries,
 high-risk files, portability checks, known pitfalls, and acceptance criteria.
-They are input to the coding agent's own plan, not a replacement for it.
+High-confidence context belongs in `Must Read`; weaker retrieval belongs in
+`Memory Hints`. Briefs are input to the coding agent's own plan, not a
+replacement for it.
 
 ### Guard a File
 
@@ -78,8 +80,9 @@ aiwiki apply .aiwiki/context-packs/reflect-plan.json
 aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm  # only after reviewed approval
 ```
 
-Reflect generates preview-only update suggestions. Apply previews by default and
-writes only with `--confirm`.
+Reflect generates preview-only update suggestions. Apply previews by default,
+records preview freshness, and writes only with `--confirm` after a fresh
+matching preview.
 
 ### Preserve Old Notes
 
@@ -134,6 +137,10 @@ The current CLI includes:
 - `ingest`
 - `apply`
 - `lint`
+- `doctor`
+- `maintain`
+- `index build`
+- `index status`
 - `graph build`
 - `graph import-graphify`
 - `graph relate`
@@ -184,8 +191,9 @@ See `README.md` for command usage and `SPEC.md` for exact behavior.
 
 Near-term:
 
-- Continue Codex usability tuning from real-project dogfood.
-- Improve Chinese/Unicode retrieval and keep Codex-owned usability evals guarding the daily workflow.
+- Tune `architecture audit` line-level evidence and false-positive severity.
+- Broaden real-project Chinese/Unicode retrieval dogfood beyond tokenizer and indexed-search basics.
+- Review doctor rule-promotion candidates before turning repeated pitfalls into active rules.
 - Continue improving the specificity of `reflect --from-git-diff` memory refresh and semantic-risk candidates.
 - `aiwiki lint --fix` for low-risk index/backlink/format repair.
 - Graph hotspots and conflicts using the existing graph model.
@@ -204,12 +212,33 @@ Later:
 ## Next Development Focus
 
 The next development work should not start with large systems from
-`SPEC-FUTURE.md`. The 2026-04-29 and 2026-05-02 dogfood passes made cold-start
-`brief`/`guard`, the Codex-owned `agent` path, and the local usability eval loop
-usable enough to protect further tuning. Next, tighten the remaining local
-Markdown workflow before adding optional adapters.
+`SPEC-FUTURE.md`. The 2026-04-29, 2026-05-02, and 2026-05-03 dogfood passes made
+cold-start `brief`/`guard`, the Codex-owned `agent` path, preview-hash apply
+safety, indexed search fallback, and the local eval loops usable enough to
+protect further tuning. Next, tighten the remaining local Markdown workflow
+before adding optional adapters.
 
-### 1. Reflect-Driven Freshness
+### 1. Architecture Audit Precision
+
+Goal: make audit findings concrete enough that users trust high-severity output.
+
+Acceptance criteria:
+
+- Findings include useful line-level evidence.
+- Product terms and test fixtures do not look like secrets.
+- Real secret-like literals still produce high-severity warnings.
+
+### 2. Retrieval And Guard Dogfood
+
+Goal: keep retrieval quality measurable across real projects and languages.
+
+Acceptance criteria:
+
+- Chinese/Unicode queries are checked against more than synthetic fixtures.
+- `Memory Hints` stays weak and does not become a fake must-read constraint.
+- Guard targets from runbooks exist in sparse checkouts and stay actionable.
+
+### 3. Reflect-Driven Freshness
 
 Goal: keep changed code connected to wiki pages that may need refresh, while
 making the generated candidates concrete enough for review.
@@ -230,7 +259,7 @@ Acceptance criteria:
 - `lint`, `brief`, and `guard` continue to show advisory staleness warnings.
 - Staleness warnings are advisory and must not block the user's task.
 
-### 2. Command Ergonomics and Retrieval Feedback
+### 4. Command Ergonomics and Retrieval Feedback
 
 Goal: make local dogfood reliable and make ranking improvements measurable.
 

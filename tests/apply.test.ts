@@ -71,40 +71,59 @@ describe("applyWikiUpdatePlan", () => {
     expect(modules).toEqual([".gitkeep"]);
   });
 
+  it("refuses confirmed applies that have not been previewed", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    await expect(
+      applyWikiUpdatePlan(
+        rootDir,
+        {
+          entries: [
+            {
+              type: "module",
+              title: "Payment",
+              summary: "Stripe and billing flows."
+            }
+          ]
+        },
+        { confirm: true }
+      )
+    ).rejects.toThrow("requires a fresh preview");
+  });
+
   it("creates confirmed wiki pages, updates index and graph, and makes memory searchable", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
 
-    const result = await applyWikiUpdatePlan(
-      rootDir,
-      {
-        title: "Stripe memory",
-        entries: [
-          {
-            type: "module",
-            title: "Payment",
-            source: "manual",
-            modules: ["payment"],
-            files: ["src/lib/stripe.ts"],
-            summary: "Stripe and billing flows."
+    const plan = {
+      title: "Stripe memory",
+      entries: [
+        {
+          type: "module",
+          title: "Payment",
+          source: "manual",
+          modules: ["payment"],
+          files: ["src/lib/stripe.ts"],
+          summary: "Stripe and billing flows."
+        },
+        {
+          type: "pitfall",
+          title: "Stripe webhook raw body",
+          slug: "stripe-webhook-raw-body",
+          source: "reflect",
+          modules: ["payment"],
+          files: ["src/app/api/stripe/webhook/route.ts"],
+          severity: "critical",
+          frontmatter: {
+            encountered_count: 2
           },
-          {
-            type: "pitfall",
-            title: "Stripe webhook raw body",
-            slug: "stripe-webhook-raw-body",
-            source: "reflect",
-            modules: ["payment"],
-            files: ["src/app/api/stripe/webhook/route.ts"],
-            severity: "critical",
-            frontmatter: {
-              encountered_count: 2
-            },
-            body: "# Pitfall: Stripe webhook raw body\n\nVerify raw body before JSON parsing.\n"
-          }
-        ]
-      },
-      { confirm: true }
-    );
+          body: "# Pitfall: Stripe webhook raw body\n\nVerify raw body before JSON parsing.\n"
+        }
+      ]
+    };
+    await applyWikiUpdatePlan(rootDir, plan);
+    const result = await applyWikiUpdatePlan(rootDir, plan, { confirm: true });
 
     expect(result.applied).toBe(true);
     expect(result.created).toEqual([
@@ -161,20 +180,18 @@ describe("applyWikiUpdatePlan", () => {
       "# Rule: Protect auth routes\n\nOriginal user text.\n"
     );
 
-    const skipped = await applyWikiUpdatePlan(
-      rootDir,
-      {
-        entries: [
-          {
-            type: "rule",
-            title: "Protect auth routes",
-            slug: "protect-auth",
-            body: "# Rule: Protect auth routes\n\nReplacement text.\n"
-          }
-        ]
-      },
-      { confirm: true }
-    );
+    const skipPlan = {
+      entries: [
+        {
+          type: "rule",
+          title: "Protect auth routes",
+          slug: "protect-auth",
+          body: "# Rule: Protect auth routes\n\nReplacement text.\n"
+        }
+      ]
+    };
+    await applyWikiUpdatePlan(rootDir, skipPlan);
+    const skipped = await applyWikiUpdatePlan(rootDir, skipPlan, { confirm: true });
 
     expect(skipped.skipped).toEqual([".aiwiki/wiki/rules/protect-auth.md"]);
     expect(skipped.created).toEqual([]);
@@ -185,25 +202,26 @@ describe("applyWikiUpdatePlan", () => {
       await readFile(path.join(rootDir, ".aiwiki", "wiki", "rules", "protect-auth.md"), "utf8")
     ).toContain("Original user text.");
 
-    const appended = await applyWikiUpdatePlan(
-      rootDir,
-      {
-        entries: [
-          {
-            type: "rule",
-            title: "Protect auth routes",
-            slug: "protect-auth",
-            append: [
-              {
-                heading: "Examples",
-                body: "Check permissions before returning auth data."
-              }
-            ]
-          }
-        ]
-      },
-      { confirm: true, rebuildGraph: false }
-    );
+    const appendPlan = {
+      entries: [
+        {
+          type: "rule",
+          title: "Protect auth routes",
+          slug: "protect-auth",
+          append: [
+            {
+              heading: "Examples",
+              body: "Check permissions before returning auth data."
+            }
+          ]
+        }
+      ]
+    };
+    await applyWikiUpdatePlan(rootDir, appendPlan);
+    const appended = await applyWikiUpdatePlan(rootDir, appendPlan, {
+      confirm: true,
+      rebuildGraph: false
+    });
 
     expect(appended.appended).toEqual([".aiwiki/wiki/rules/protect-auth.md"]);
     expect(appended.graphUpdated).toBe(false);
@@ -219,6 +237,70 @@ describe("applyWikiUpdatePlan", () => {
     expect(rule).toContain("Original user text.");
     expect(rule).toContain("Check permissions before returning auth data.");
     expect(rule).toContain("last_updated:");
+  });
+
+  it("records preview hashes and refuses stale confirmed appends", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    const rulePath = path.join(rootDir, ".aiwiki", "wiki", "rules", "protect-auth.md");
+    await writeMarkdownFile(
+      rulePath,
+      {
+        type: "rule",
+        title: "Protect auth routes",
+        status: "proposed"
+      },
+      "# Rule: Protect auth routes\n\nOriginal user text.\n"
+    );
+    const plan = {
+      entries: [
+        {
+          type: "rule",
+          title: "Protect auth routes",
+          slug: "protect-auth",
+          append: [
+            {
+              heading: "Examples",
+              body: "Check permissions before returning auth data."
+            }
+          ]
+        }
+      ]
+    };
+
+    const preview = await applyWikiUpdatePlan(rootDir, plan, {
+      previewStateKey: "protect-auth-plan.json"
+    });
+    expect(preview.applied).toBe(false);
+    expect(preview.preview.operations[0]?.targetHash).toMatch(/^[a-f0-9]{64}$/u);
+
+    await writeMarkdownFile(
+      rulePath,
+      {
+        type: "rule",
+        title: "Protect auth routes",
+        status: "proposed"
+      },
+      "# Rule: Protect auth routes\n\nChanged after preview.\n"
+    );
+
+    await expect(
+      applyWikiUpdatePlan(rootDir, plan, {
+        confirm: true,
+        previewStateKey: "protect-auth-plan.json"
+      })
+    ).rejects.toThrow("changed after preview");
+
+    await applyWikiUpdatePlan(rootDir, plan, {
+      previewStateKey: "protect-auth-plan.json"
+    });
+    const applied = await applyWikiUpdatePlan(rootDir, plan, {
+      confirm: true,
+      previewStateKey: "protect-auth-plan.json",
+      rebuildGraph: false
+    });
+
+    expect(applied.appended).toEqual([".aiwiki/wiki/rules/protect-auth.md"]);
   });
 
   it("rejects malformed JSON, invalid paths, unknown types, and invalid frontmatter", async () => {

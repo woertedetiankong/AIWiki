@@ -11,7 +11,7 @@ import {
 import { AIWikiNotInitializedError, loadAIWikiConfig } from "./config.js";
 import { resolveProjectPath } from "./paths.js";
 import type { OutputFormat } from "./output.js";
-import type { WikiPage, WikiPageFrontmatter } from "./types.js";
+import type { WikiPage, WikiPageFrontmatter, WikiPageType } from "./types.js";
 import { scanWikiPages } from "./wiki-store.js";
 
 export interface HybridIndexOptions {
@@ -64,6 +64,17 @@ export interface HybridIndexStatus {
   error?: string;
 }
 
+export interface IndexedWikiSearchOptions {
+  type?: WikiPageType;
+  limit?: number;
+  tokens: string[];
+}
+
+export interface IndexedWikiSearchResult {
+  page: WikiPage;
+  bm25: number;
+}
+
 const SCHEMA_VERSION = "1";
 
 interface PageRow {
@@ -81,6 +92,15 @@ interface PageRow {
 interface PageFingerprintRow {
   relative_path: string;
   content_hash: string;
+}
+
+interface FtsFingerprintRow {
+  relative_path: string;
+  count: number;
+}
+
+interface IndexedSearchRow extends PageRow {
+  bm25_rank: number;
 }
 
 function unique(values: Array<string | undefined>): string[] {
@@ -174,6 +194,34 @@ function indexDbPath(rootDir: string): string {
 
 function indexJsonlPath(rootDir: string): string {
   return resolveProjectPath(rootDir, HYBRID_INDEX_JSONL_PATH);
+}
+
+function wikiPageFromRow(rootDir: string, row: PageRow): WikiPage {
+  const frontmatter = JSON.parse(row.frontmatter_json) as WikiPageFrontmatter;
+  return {
+    path: resolveProjectPath(rootDir, WIKI_DIR, row.relative_path),
+    relativePath: row.relative_path,
+    frontmatter,
+    body: row.body
+  };
+}
+
+function quoteFtsToken(token: string): string {
+  return `"${token.replace(/"/gu, '""')}"`;
+}
+
+function buildFtsQuery(tokens: string[]): string | undefined {
+  const safeTokens = unique(
+    tokens
+      .map((token) => token.trim())
+      .filter((token) => token.length > 0)
+  );
+
+  if (safeTokens.length === 0) {
+    return undefined;
+  }
+
+  return safeTokens.map(quoteFtsToken).join(" OR ");
 }
 
 function initializeSchema(db: Database.Database): void {
@@ -462,8 +510,9 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
     };
   }
 
-  const db = new Database(dbPath, { readonly: true });
+  let db: Database.Database | undefined;
   try {
+    db = new Database(dbPath, { readonly: true });
     const pageCountRow = db
       .prepare("SELECT count(*) AS count FROM wiki_pages")
       .get() as { count: number };
@@ -473,6 +522,21 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
     const indexedByPath = new Map(
       indexedRows.map((row) => [row.relative_path, row.content_hash])
     );
+    const ftsRows = db
+      .prepare(
+        "SELECT relative_path, count(*) AS count FROM wiki_pages_fts GROUP BY relative_path ORDER BY relative_path"
+      )
+      .all() as FtsFingerprintRow[];
+    const ftsByPath = new Map(
+      ftsRows.map((row) => [row.relative_path, row.count])
+    );
+    const ftsMissingPages = indexedRows
+      .filter((row) => ftsByPath.get(row.relative_path) !== 1)
+      .map((row) => row.relative_path);
+    const ftsExtraPages = ftsRows
+      .filter((row) => !indexedByPath.has(row.relative_path))
+      .map((row) => row.relative_path);
+    const ftsFresh = ftsMissingPages.length === 0 && ftsExtraPages.length === 0;
     const missingPages = sourceRecords
       .filter((record) => !indexedByPath.has(record.relativePath))
       .map((record) => record.relativePath);
@@ -488,7 +552,8 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       schemaVersion === SCHEMA_VERSION &&
       missingPages.length === 0 &&
       extraPages.length === 0 &&
-      stalePages.length === 0;
+      stalePages.length === 0 &&
+      ftsFresh;
 
     return {
       dbPath,
@@ -506,7 +571,10 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       missingPages,
       extraPages,
       indexedAt: readMetadata(db, "indexed_at"),
-      schemaVersion
+      schemaVersion,
+      error: ftsFresh
+        ? undefined
+        : `SQLite FTS table drift: ${ftsMissingPages.length} missing/duplicate, ${ftsExtraPages.length} extra.`
     };
   } catch (error) {
     return {
@@ -527,7 +595,7 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       error: error instanceof Error ? error.message : String(error)
     };
   } finally {
-    db.close();
+    db?.close();
   }
 }
 
@@ -548,15 +616,56 @@ export async function readIndexedWikiPages(rootDir: string): Promise<WikiPage[] 
       )
       .all() as PageRow[];
 
-    return rows.map((row) => {
-      const frontmatter = JSON.parse(row.frontmatter_json) as WikiPageFrontmatter;
-      return {
-        path: resolveProjectPath(rootDir, WIKI_DIR, row.relative_path),
-        relativePath: row.relative_path,
-        frontmatter,
-        body: row.body
-      };
-    });
+    return rows.map((row) => wikiPageFromRow(rootDir, row));
+  } finally {
+    db.close();
+  }
+}
+
+export async function searchIndexedWikiPages(
+  rootDir: string,
+  options: IndexedWikiSearchOptions
+): Promise<IndexedWikiSearchResult[] | undefined> {
+  const dbPath = indexDbPath(rootDir);
+  const ftsQuery = buildFtsQuery(options.tokens);
+  const limit = options.limit ?? 10;
+
+  if (!ftsQuery || limit <= 0 || !(await pathExists(dbPath))) {
+    return undefined;
+  }
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const typeClause = options.type ? "AND p.type = @type" : "";
+    const rows = db
+      .prepare(
+        `SELECT p.relative_path,
+                p.type,
+                p.status,
+                p.title,
+                p.body,
+                p.frontmatter_json,
+                p.source_mtime_ms,
+                p.content_hash,
+                p.indexed_at,
+                bm25(wiki_pages_fts, 0.0, 5.0, 2.0, 4.0) AS bm25_rank
+         FROM wiki_pages_fts
+         JOIN wiki_pages p ON p.relative_path = wiki_pages_fts.relative_path
+         WHERE wiki_pages_fts MATCH @query
+         ${typeClause}
+         ORDER BY bm25_rank ASC, p.relative_path ASC
+         LIMIT @limit`
+      )
+      .all({
+        query: ftsQuery,
+        type: options.type,
+        limit
+      }) as IndexedSearchRow[];
+
+    return rows.map((row) => ({
+      page: wikiPageFromRow(rootDir, row),
+      bm25: row.bm25_rank
+    }));
   } finally {
     db.close();
   }
@@ -596,7 +705,7 @@ export function formatHybridIndexStatusMarkdown(status: HybridIndexStatus): stri
 
   if (!status.initialized) {
     lines.push("", "Run `aiwiki init --project-name <name>` and `aiwiki map --write` before building the index.");
-  } else if (!status.fresh && !status.error) {
+  } else if (!status.fresh) {
     lines.push("", "Run `aiwiki index build` to refresh the derived index.");
   }
 

@@ -118,6 +118,47 @@ describe("generateCodexRunbook", () => {
     );
   });
 
+  it("keeps team runbook commands read-only when requested", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addCodexMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+
+    const result = await generateCodexRunbook(rootDir, "improve search memory", {
+      team: true,
+      readOnly: true
+    });
+    const commands = result.runbook.team?.roles.flatMap((role) => role.commands).join("\n") ?? "";
+
+    expect(result.runbook.commands.start).toContain("aiwiki agent 'improve search memory' --read-only");
+    expect(commands).toContain("Read-only mode: skip task ready");
+    expect(commands).toContain("aiwiki agent 'improve search memory' --read-only");
+    expect(commands).not.toContain("aiwiki task ready --format json");
+    expect(commands).not.toContain("aiwiki task claim <id>");
+  });
+
+  it("filters stale memory paths out of runbook guard targets", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), { recursive: true });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "missing.md"),
+      {
+        type: "module",
+        title: "Missing module",
+        modules: ["missing"],
+        files: ["src/missing.ts"]
+      },
+      "# Missing module\n\nStale memory points at a file that no longer exists.\n"
+    );
+
+    const result = await generateCodexRunbook(rootDir, "work on missing module");
+
+    expect(result.runbook.guardTargets).not.toContain("src/missing.ts");
+    expect(result.markdown).not.toContain("aiwiki guard src/missing.ts");
+  });
+
   it("shell-quotes task text in runbook commands", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

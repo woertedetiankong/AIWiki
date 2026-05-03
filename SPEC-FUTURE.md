@@ -1,6 +1,6 @@
 # AIWiki Future Specification
 
-Status: Draft backlog, refreshed after Codex-owned usability hardening on 2026-05-03.
+Status: Draft backlog, refreshed after mature workflow hardening on 2026-05-03.
 
 Purpose: Track optional and not-yet-implemented AIWiki capabilities separately from `SPEC.md`,
 which describes the current implemented CLI contract.
@@ -12,9 +12,9 @@ for durable memory writes, and covered by tests before it moves into `SPEC.md`.
 
 The 2026-04-29 Codex dogfood pass made the current local CLI usable as an alpha
 Codex project-memory workflow, the 2026-05-01 pass added work-graph, reflect,
-guard, doctor, and large-repo eval hardening, and the 2026-05-03 pass tightened
-the Codex-owned usability loop. The following should be treated as implemented
-baseline, not future backlog:
+guard, doctor, and large-repo eval hardening, and the 2026-05-03 passes tightened
+the Codex-owned usability loop and mature workflow safety. The following should
+be treated as implemented baseline, not future backlog:
 
 - `brief` and `guard` can run in read-only cold-start mode before `.aiwiki/`
   exists.
@@ -34,8 +34,16 @@ baseline, not future backlog:
   files or files newer than the page's `last_updated` value.
 - `brief` and `guard` include compact advisory `Staleness Warnings` for selected
   memory, with full warning details in JSON output.
+- `brief` separates high-confidence `Must Read` context from lower-confidence
+  `Memory Hints`, and includes `Memory Coverage` so sparse recall is explicit.
+- `guard` includes `Memory Coverage` and avoids presenting low-confidence
+  contextual recall as file-specific constraints.
 - `brief`, `reflect`, and `resume` support explicit `--read-only` mode for
   Codex context gathering with no filesystem writes.
+- `agent` and `codex` support `--read-only` for context-only runs that avoid
+  task start/claim and project-map bootstrap writes.
+- `agent`, `codex`, and `resume` output mode-boundary guidance so Codex can
+  distinguish context-only runs from workflow-state writes.
 - `module brief` uses the same compact Codex-facing section style as `brief` and
   `guard`.
 - `prime` provides a compact Codex startup dashboard with active task, ready
@@ -56,6 +64,8 @@ baseline, not future backlog:
 - `eval large-repos` provides a maintainer smoke eval for cold-start `prime`,
   `codex --team`, and representative `guard` behavior across sparse large-repo
   fixtures.
+- `eval large-repos` fails when generated guard targets do not exist in the
+  sparse checkout or are outside fixture sparse paths.
 - `eval usability` provides a local maintainer loop for natural-language resume,
   payment guard precision, module import preview safety, and
   maintainability/hardcoding guidance without remote providers.
@@ -70,21 +80,33 @@ baseline, not future backlog:
   entries when it lacks concrete notes or reusable lessons.
 - Project scans combine built-in generated/dependency ignores, repository
   `.gitignore`, and `.aiwiki/config.json` `ignore` overrides.
+- `search --index` uses the derived SQLite FTS table with BM25 ranking while
+  preserving Markdown-style recall across all indexed pages.
+- `index status` checks SQLite rows and FTS table integrity, and indexed search
+  falls back to Markdown when the derived index is stale, corrupt, or drifted.
+- `apply` previews write freshness state under `.aiwiki/cache/apply-previews`;
+  confirmed applies require a fresh matching preview and reject append writes if
+  a target page changed after preview.
 - Cold-start `brief` ranking was dogfooded and tuned on a mixed PMS repository
   and the Python `pydantic-deepagents` repository without writing `.aiwiki/` into
   those target projects.
+- The hardened large-repo eval passed cached sparse fixtures for Django, Spring,
+  TypeScript, React, and curl on 2026-05-03.
 
 ## Next Implementation Order
 
 Start implementation work here before taking on larger adapters:
 
-1. Improve Chinese/Unicode retrieval for `search`, `brief`, and `guard`.
-2. Tune `architecture audit` line-level evidence and false-positive severity.
-3. Continue real-project dogfood when changing ranking, scan heuristics, or
+1. Tune `architecture audit` line-level evidence and false-positive severity.
+2. Broaden real-project Chinese/Unicode retrieval dogfood beyond tokenizer and
+   BM25 basics.
+3. Review current `doctor` rule-promotion candidates before turning repeated
+   pitfalls into active rules.
+4. Continue real-project dogfood when changing ranking, scan heuristics, or
    Codex-owned workflow output.
-4. Keep improving `reflect --from-git-diff` candidate specificity when new
+5. Keep improving `reflect --from-git-diff` candidate specificity when new
    dogfood cases reveal generic text.
-5. Only then consider optional adapters such as code-context, semantic memory, or
+6. Only then consider optional adapters such as code-context, semantic memory, or
    deep-context.
 
 ## Near-Term Hardening Before Future Adapters
@@ -97,21 +119,22 @@ such as code-context, semantic indexing, prompt optimization, or deep-context.
 Goal: make AIWiki outputs consistently useful to Codex across projects, not only
 inside the AIWiki repository.
 
-Implemented first slice:
+Implemented slices:
 
 - `brief` can run read-only before `.aiwiki/` exists and reports cold-start mode.
 - `brief` ranking downranks package-name noise, generated/dependency directories,
   unrelated app/example/CLI subprojects, and tests for non-test tasks.
 - `brief` prefers implementation files for common fix tasks while preserving JSON
   detail for fuller context.
+- `brief` moves low-confidence recall to `Memory Hints` instead of treating it as
+  mandatory `Must Read` context.
+- `guard` and `brief` report `Memory Coverage` so sparse local memory is visible
+  before Codex relies on it.
 - Project scans respect built-in defaults, root `.gitignore`, and config ignore
   overrides.
 
 Remaining requirements:
 
-- Codex-facing Markdown output SHOULD continue to distinguish `Must Read`, `Do
-  Not`, `Rules`, `Pitfalls`, `Suggested Tests`, and `Staleness Warnings` when
-  applicable.
 - Common `brief`, `guard`, `resume`, and `reflect` outputs SHOULD fit in roughly
   one to one-and-a-half terminal screens.
 - JSON output MAY remain more complete than Markdown output.
@@ -163,6 +186,8 @@ Completed first slice:
 Ongoing requirements:
 
 - Re-run real-project dogfood whenever ranking or scan heuristics change.
+- Keep the large-repo fixture set strict about guard target existence and sparse
+  checkout coverage.
 - Capture where `reflect` proposes overly broad module memory.
 - Do not add project-specific heuristics unless they generalize across local
   codebases.
@@ -311,8 +336,9 @@ interface CodeContextResult {
 
 ## 7. Semantic Memory Index
 
-Semantic Memory Index is an optional acceleration layer for AIWiki Markdown memory. The Markdown
-wiki MUST remain the source of truth, and the index MUST be rebuildable from `.aiwiki/`.
+Semantic Memory Index is an optional acceleration layer beyond the current local
+SQLite FTS/BM25 index. The Markdown wiki MUST remain the source of truth, and
+the index MUST be rebuildable from `.aiwiki/`.
 
 Planned command shape:
 

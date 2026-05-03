@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { buildHybridIndex } from "../src/hybrid-index.js";
 import { writeMarkdownFile } from "../src/markdown.js";
 import { formatSearchResponse } from "../src/output.js";
 import { searchWikiMemory } from "../src/search.js";
@@ -138,6 +139,40 @@ describe("searchWikiMemory", () => {
     expect(response.source).toBe("markdown");
     expect(response.indexStatus?.fresh).toBe(false);
     expect(markdown).toContain("Index usage: unavailable; scanned Markdown instead.");
+  });
+
+  it("preserves substring recall when indexed search uses FTS ranking", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki"), {
+      recursive: true
+    });
+    await writeFile(
+      path.join(rootDir, ".aiwiki", "config.json"),
+      `${JSON.stringify({ projectName: "demo" }, null, 2)}\n`,
+      "utf8"
+    );
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), {
+      recursive: true
+    });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "auth.md"),
+      {
+        type: "module",
+        title: "Authentication module",
+        modules: ["auth"]
+      },
+      "# Authentication module\n\nSession login behavior.\n"
+    );
+    await buildHybridIndex(rootDir);
+
+    const response = await searchWikiMemory(rootDir, "thenti", {
+      useIndex: true
+    });
+
+    expect(response.source).toBe("sqlite");
+    expect(response.indexStatus?.fresh).toBe(true);
+    expect(response.results[0]?.title).toBe("Authentication module");
+    expect(response.results[0]?.bm25).toBeUndefined();
   });
 
   it("matches Chinese titles, body text, and mixed Chinese/English queries", async () => {
