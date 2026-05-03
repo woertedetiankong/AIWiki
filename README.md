@@ -268,6 +268,17 @@ preview and only confirm after review. Generic entries such as "Reflection
 candidate for X" should be revised into concrete durable lessons or rejected
 before confirmation.
 
+`session scan` and `session reflect` are the preview-first path for turning
+coding-agent session traces into reviewed AIWiki memory. They currently read
+Codex and Claude JSONL traces, match sessions to the current project by `cwd`,
+ignore system/developer prompts and tool outputs, and extract conservative
+pitfall or decision candidates from explicit "pitfall", "root cause", decision,
+or structured Chinese language such as `踩坑：`, `根因`, and `决定：`.
+`session reflect` only creates an update-plan draft when `--output-plan` is
+provided; it never writes wiki pages directly. Review the plan with
+`aiwiki apply <plan.json>` and confirm only after editing or accepting the
+candidate memory.
+
 `checkpoint` is optimized for handoff by default. When git is available, it
 captures changed files from `git diff` and `git status`; if `--tests` or
 `--next` are omitted, it records suggested test commands and a concrete next
@@ -283,10 +294,10 @@ will read `bd ready --json` and `bd status --json` when the `bd` CLI is
 available, but AIWiki does not write to or reimplement Beads.
 
 Most Codex sessions should only need `prime`, `agent`, `brief`, `guard`,
-`checkpoint`, `resume`, `reflect`, and the lightweight `task` subcommands when
-work needs coordination. The top-level help intentionally keeps that daily path
-visible and moves graph relations, module packs, eval fixtures, indexes, and
-compatibility aliases behind `aiwiki help advanced`.
+`checkpoint`, `resume`, `reflect`, `session`, and the lightweight `task`
+subcommands when work needs coordination. The top-level help intentionally keeps
+that daily path visible and moves graph relations, module packs, eval fixtures,
+indexes, and compatibility aliases behind `aiwiki help advanced`.
 
 When the user is not comfortable with CLI details, Codex should run
 `aiwiki agent "<task>" --runbook` first and follow the generated runbook. The
@@ -334,6 +345,8 @@ aiwiki guard <file> [--limit <n>] [--with-graphify] [--architecture-guard] [--fo
 aiwiki map [--write] [--force] [--format markdown|json]
 aiwiki maintain [--no-from-git-diff] [--output-plan <path>] [--force] [--min-rule-count <n>] [--format markdown|json]
 aiwiki reflect [--from-git-diff] [--notes <path>] [--save-raw] [--limit <n>] [--output-plan <path>] [--force] [--read-only] [--format markdown|json]
+aiwiki session scan [--provider codex|claude] [--path <path>] [--since <duration-or-date>] [--limit <n>] [--all-projects] [--format markdown|json]
+aiwiki session reflect [--provider codex|claude] [--path <path>] [--since <duration-or-date>] [--limit <n>] [--all-projects] [--output-plan <path>] [--force] [--read-only] [--format markdown|json]
 aiwiki apply <plan.json> [--confirm] [--no-graph] [--format markdown|json]
 aiwiki lint [--format markdown|json]
 aiwiki doctor [--min-rule-count <n>] [--format markdown|json]
@@ -395,7 +408,7 @@ Important source files:
 - `src/templates.ts`: default `.aiwiki/` Markdown and prompt templates.
 - `src/managed-write.ts`: non-overwrite and forceable-template write policy.
 - `src/hybrid-index.ts`: derived SQLite FTS/BM25 wiki index and JSONL snapshot generation.
-- `src/brief.ts`, `src/guard.ts`, `src/maintain.ts`, `src/reflect.ts`, `src/ingest.ts`, `src/apply.ts`: core memory workflow services.
+- `src/brief.ts`, `src/guard.ts`, `src/maintain.ts`, `src/reflect.ts`, `src/session.ts`, `src/ingest.ts`, `src/apply.ts`: core memory workflow services.
 - `src/errors.ts`, `src/risk-rules.ts`: structured JSON CLI errors and reusable semantic risk heuristics.
 - `src/graph.ts`, `src/graphify.ts`, `src/architecture.ts`, `src/module-pack.ts`, `src/task.ts`, `src/prime.ts`, `src/schema.ts`, `src/large-repo-eval.ts`, `src/usability-eval.ts`: graph, external context, architecture, module portability, task work graph, startup dashboard, agent-facing schemas, large-repository smoke evals, and Codex-owned usability evals.
 - `src/shell-quote.ts`, `src/git-guard-targets.ts`: shared helpers for shell-safe generated commands and source-first dirty-file guard target ranking.

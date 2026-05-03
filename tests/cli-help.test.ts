@@ -31,6 +31,7 @@ describe("CLI help surface", () => {
     expect(stdout).toContain("agent [options] <task>");
     expect(stdout).toContain("guard [options] <file>");
     expect(stdout).toContain("reflect [options]");
+    expect(stdout).toContain("session");
     expect(stdout).toContain("maintain [options]");
     expect(stdout).toContain("doctor [options]");
     expect(stdout).not.toContain("advanced");

@@ -60,6 +60,7 @@ Important boundary:
 - Generate file-specific guardrails before editing.
 - Preserve raw notes and generate structured wiki update suggestions.
 - Generate reflection previews from notes and/or `git diff`.
+- Generate preview-first memory candidates from coding-agent session traces.
 - Apply confirmed wiki update plans with preview-first semantics.
 - Build a lightweight graph from wiki pages, frontmatter, markdown links, and file references.
 - Check wiki health and report errors/warnings.
@@ -138,6 +139,11 @@ Important boundary:
    - Reads optional external artifacts such as Graphify output.
    - Treats external artifacts as task context, not confirmed AIWiki memory.
 
+11. `Session Trace Adapter Layer`
+   - Reads optional local coding-agent session traces.
+   - Normalizes provider-specific JSONL into project-scoped session summaries.
+   - Treats session traces as candidate context, not confirmed AIWiki memory.
+
 ### 3.2 Abstraction Levels
 
 AIWiki is easiest to extend when kept in these layers:
@@ -149,7 +155,7 @@ AIWiki is easiest to extend when kept in these layers:
    - `.aiwiki/` layout, page frontmatter, graph JSON, task files.
 
 3. `Domain Services`
-   - brief, guard, reflect, ingest, apply, lint, graph, task.
+   - brief, guard, reflect, session, ingest, apply, lint, graph, task.
 
 4. `Command Surface`
    - user-facing CLI and stable output formats.
@@ -754,6 +760,37 @@ Behavior:
 Future behavior:
 
 - SHOULD include Quality Debt.
+
+### 6.6a `aiwiki session`
+
+Usage:
+
+```bash
+aiwiki session scan [--provider codex|claude] [--path <path>]
+                    [--since <duration-or-date>] [--limit <n>]
+                    [--all-projects] [--format markdown|json]
+aiwiki session reflect [--provider codex|claude] [--path <path>]
+                       [--since <duration-or-date>] [--limit <n>]
+                       [--all-projects] [--output-plan <path>]
+                       [--force] [--read-only] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST support Codex and Claude JSONL session traces.
+- MUST match sessions to the current project by recorded `cwd` unless `--all-projects` is provided.
+- MUST treat session traces as external context, not confirmed AIWiki memory.
+- MUST ignore system/developer prompts and tool outputs when extracting candidate memories.
+- MUST generate conservative pitfall or decision candidates only from explicit session language such
+  as pitfall, root cause, decision, or equivalent Chinese terms such as `踩坑：`, `根因`, `报错`,
+  and `决定：`.
+- MUST mark generated update-plan entries as `proposed`.
+- MUST include `source_sessions` frontmatter for traceability when writing plan entries.
+- MUST NOT write structured wiki pages directly.
+- `session reflect --output-plan` MUST write a project-local update plan draft.
+- `session reflect --output-plan` MUST NOT overwrite an existing file unless `--force` is provided.
+- `session reflect --read-only` MUST reject `--output-plan`.
+- SHOULD degrade gracefully when the provider trace path is missing by returning an empty scan.
 
 ### 6.7 `aiwiki ingest`
 

@@ -1,6 +1,6 @@
 # AIWiki Future Specification
 
-Status: Draft backlog, refreshed after mature workflow hardening on 2026-05-03.
+Status: Draft backlog, refreshed after session-to-memory preview on 2026-05-03.
 
 Purpose: Track optional and not-yet-implemented AIWiki capabilities separately from `SPEC.md`,
 which describes the current implemented CLI contract.
@@ -87,6 +87,9 @@ be treated as implemented baseline, not future backlog:
 - `apply` previews write freshness state under `.aiwiki/cache/apply-previews`;
   confirmed applies require a fresh matching preview and reject append writes if
   a target page changed after preview.
+- `session scan` and `session reflect` provide a local, preview-first path from
+  Codex and Claude JSONL traces to proposed memory candidates without writing
+  long-term wiki pages directly.
 - Cold-start `brief` ranking was dogfooded and tuned on a mixed PMS repository
   and the Python `pydantic-deepagents` repository without writing `.aiwiki/` into
   those target projects.
@@ -104,10 +107,11 @@ Start implementation work here before taking on larger adapters:
    pitfalls into active rules.
 4. Continue real-project dogfood when changing ranking, scan heuristics, or
    Codex-owned workflow output.
-5. Keep improving `reflect --from-git-diff` candidate specificity when new
+5. Keep improving `session reflect` precision from reviewed real sessions.
+6. Keep improving `reflect --from-git-diff` candidate specificity when new
    dogfood cases reveal generic text.
-6. Only then consider optional adapters such as code-context, semantic memory, or
-   deep-context.
+7. Only then consider larger optional adapters such as code-context, semantic
+   memory, or deep-context.
 
 ## Near-Term Hardening Before Future Adapters
 

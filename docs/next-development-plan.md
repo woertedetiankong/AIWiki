@@ -53,6 +53,8 @@ aiwiki guard <file>
 aiwiki checkpoint ...
 aiwiki resume
 aiwiki reflect --from-git-diff
+aiwiki session scan
+aiwiki session reflect --output-plan <path>
 ```
 
 These commands should stay short, stable, and highly tested. Most AI coding
@@ -155,7 +157,39 @@ Remaining planned work:
 - Tune synonym coverage only when repeated user language shows a durable pattern.
 - Keep mixed Chinese/English queries useful without overfitting to this repo.
 
-## Priority 3: Reduce Architecture Audit Noise
+## Priority 3: Session-To-Memory Precision
+
+Status: first slice implemented on 2026-05-03.
+
+AIWiki now has a conservative session-to-memory path:
+
+```bash
+aiwiki session scan --provider codex
+aiwiki session reflect --provider codex --output-plan .aiwiki/context-packs/session-plan.json
+aiwiki apply .aiwiki/context-packs/session-plan.json
+```
+
+Implemented behavior:
+
+- Reads local Codex and Claude JSONL session traces.
+- Matches sessions to the current project by recorded `cwd` unless `--all-projects` is provided.
+- Ignores system/developer prompts, tool outputs, test logs, and subagent notifications when extracting candidates.
+- Requires explicit pitfall or decision language such as `踩坑：`, `根因`, `pitfall`, `root cause`, or `decision`.
+- Emits proposed update-plan entries only; wiki pages are still written only through reviewed `aiwiki apply` confirmation.
+
+Remaining planned work:
+
+- Add more provider adapters only when their trace formats are well understood.
+- Improve extraction precision from reviewed real sessions instead of broadening heuristics prematurely.
+- Consider manual session note prompts that ask agents to write structured `踩坑：/根因/修复方式` blocks when a reusable lesson is found.
+
+Acceptance criteria:
+
+- Ordinary product discussion and tests logs do not become pitfall candidates.
+- Explicit session-captured lessons produce proposed memory that can be previewed with `aiwiki apply`.
+- The workflow remains local-only and never writes long-term memory directly.
+
+## Priority 4: Reduce Architecture Audit Noise
 
 `architecture audit` is useful, but current hardcoded-literal detection can
 over-report normal product terms such as `tokenBudget` or tests that mention
@@ -176,7 +210,7 @@ Acceptance criteria:
 - Real secret-looking literals still produce high-severity warnings.
 - Markdown stays readable and JSON contains full detail.
 
-## Priority 4: Add a First-Class Agent Entry Point
+## Priority 5: Add a First-Class Agent Entry Point
 
 Status: implemented and continuing to refine from dogfood.
 
@@ -218,7 +252,7 @@ Acceptance criteria:
 - Output fits in roughly one terminal screen.
 - The command does not hide or bypass safety semantics from `brief` and `guard`.
 
-## Priority 5: Make Guardrails More Specific
+## Priority 6: Make Guardrails More Specific
 
 Status: third slice implemented.
 
@@ -249,7 +283,7 @@ Acceptance criteria:
   it does.
 - File path normalization and project-root safety remain tested.
 
-## Priority 6: Improve Dev and Dogfood Ergonomics
+## Priority 7: Improve Dev and Dogfood Ergonomics
 
 The current local development path works, but `npm run dev -- ...` adds noise
 and can be awkward across shells. AI-facing output should be as clean as
@@ -268,7 +302,7 @@ Acceptance criteria:
 - Windows PowerShell examples are tested or clearly marked.
 - AI-facing docs emphasize the daily Codex loop first.
 
-## Priority 7: Reflect-Driven Freshness
+## Priority 8: Reflect-Driven Freshness
 
 Status: second slice implemented.
 
@@ -318,11 +352,12 @@ Markdown CLI dependable.
    index basics.
 3. Review the current doctor rule-promotion candidates before turning repeated
    pitfalls into active rules.
-4. Continue improving `guard` related-file and semantic-risk precision from
+4. Continue improving session-to-memory precision from reviewed real sessions.
+5. Continue improving `guard` related-file and semantic-risk precision from
    real-project dogfood.
-5. Improve Windows/dev command ergonomics only when dogfood reveals a concrete
+6. Improve Windows/dev command ergonomics only when dogfood reveals a concrete
    copy-paste failure.
-6. Keep `reflect --from-git-diff` candidate specificity under the usability and
+7. Keep `reflect --from-git-diff` candidate specificity under the usability and
    dogfood loop instead of adding broad memory automation.
 
 ## Verification Checklist

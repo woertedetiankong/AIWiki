@@ -194,6 +194,12 @@ export {
 } from "./schema.js";
 export { searchWikiMemory } from "./search.js";
 export {
+  formatSessionReflectMarkdown,
+  formatSessionScanMarkdown,
+  reflectAgentSessions,
+  scanAgentSessions
+} from "./session.js";
+export {
   addTaskDependency,
   checkpointTask,
   closeTask,
@@ -252,6 +258,16 @@ export type {
   WikiUpdatePreview,
   WikiUpdateSource
 } from "./apply.js";
+export type {
+  SessionProvider,
+  SessionRecord,
+  SessionReflectOptions,
+  SessionReflectPreview,
+  SessionReflectResult,
+  SessionScanOptions,
+  SessionScanResult,
+  SessionSignal
+} from "./session.js";
 export type {
   BacklinksJson,
   GraphBuildOptions,

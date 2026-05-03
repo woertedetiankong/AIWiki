@@ -34,6 +34,8 @@ CLI contract.
 - Long-term memory writes require explicit confirmation.
 - Agent rules, global rules, and cross-project imports require extra caution.
 - External adapters provide context, not confirmed facts.
+- Session traces can seed candidate memory, but long-term writes still require
+  preview and explicit confirmation.
 - The current CLI workflow matters more than Web UI, cloud sync, MCP, or heavy
   retrieval infrastructure.
 
@@ -139,6 +141,8 @@ The current CLI includes:
 - `lint`
 - `doctor`
 - `maintain`
+- `session scan`
+- `session reflect`
 - `index build`
 - `index status`
 - `graph build`
@@ -198,6 +202,8 @@ Near-term:
 - `aiwiki lint --fix` for low-risk index/backlink/format repair.
 - Graph hotspots and conflicts using the existing graph model.
 - Retrieval feedback and tuning for brief, guard, reflect, and module workflows.
+- Broaden session trace extraction beyond conservative pitfall/decision
+  heuristics while preserving preview-first review.
 
 Later:
 

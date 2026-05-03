@@ -5,6 +5,15 @@ This file summarizes the implementation history that used to live in root-level
 
 ## 2026-05-03
 
+### Session-To-Memory Preview
+
+- Added first-class `aiwiki session scan` and `aiwiki session reflect` commands for local Codex and Claude JSONL traces.
+- Matched session traces to the current project by recorded `cwd`, with `--all-projects` available for diagnostics.
+- Kept session-derived memory preview-first: session reflection creates proposed update-plan entries and never writes `.aiwiki/wiki/` pages directly.
+- Filtered system/developer prompts, tool outputs, test logs, subagent notifications, and broad chat summaries so explicit `踩坑：`, `根因`, `pitfall`, `root cause`, and decision signals are required before candidates appear.
+- Documented the session workflow in README, PRD, SPEC, future/backlog docs, and AIWiki project memory.
+- Verified with `npm run typecheck`, `npm run test`, `npm run build`, `aiwiki session scan --provider codex --since 1d --limit 2`, `aiwiki session reflect --provider codex --since 1d --limit 5 --read-only`, `aiwiki reflect --from-git-diff --read-only`, `aiwiki doctor`, and `aiwiki lint`.
+
 ### Mature Workflow Hardening
 
 - Split `brief` retrieval into high-confidence `Must Read` memory and lower-confidence `Memory Hints`, so weak recall no longer reads as mandatory implementation guidance.

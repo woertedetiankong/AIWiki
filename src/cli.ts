@@ -40,6 +40,11 @@ import { generateRulePromotionPreview } from "./promote-rules.js";
 import { generateReflectPreview } from "./reflect.js";
 import { getSchemaResult, parseSchemaName } from "./schema.js";
 import { searchWikiMemory } from "./search.js";
+import {
+  reflectAgentSessions,
+  scanAgentSessions,
+  type SessionProvider
+} from "./session.js";
 import { runUsabilityEval } from "./usability-eval.js";
 import {
   addTaskDependency,
@@ -148,6 +153,18 @@ function parseRiskLevel(value: string | undefined): RiskLevel | undefined {
   }
 
   throw new Error(`Unsupported severity: ${value}`);
+}
+
+function parseSessionProvider(value: string | undefined): SessionProvider | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === "codex" || value === "claude") {
+    return value;
+  }
+
+  throw new Error(`Unsupported session provider: ${value}`);
 }
 
 function parseFixtureNames(values: string[] | undefined): string[] | undefined {
@@ -797,6 +814,83 @@ program
         saveRaw: options.saveRaw
       });
 
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+const sessionCommand = program
+  .command("session")
+  .description("Read coding-agent sessions and propose reviewable memory candidates.");
+
+sessionCommand
+  .command("scan")
+  .description("List coding-agent sessions that belong to this project.")
+  .option("--provider <provider>", "Session provider: codex or claude", "codex")
+  .option("--path <path>", "Override the provider trace directory")
+  .option("--since <duration>", "Only include sessions after an ISO date or duration such as 24h, 7d, or 2w")
+  .option("--limit <n>", "Maximum number of sessions to include")
+  .option("--all-projects", "Include sessions even when their cwd does not match this project", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      options: {
+        provider?: string;
+        path?: string;
+        since?: string;
+        limit?: string;
+        allProjects?: boolean;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await scanAgentSessions(process.cwd(), {
+        provider: parseSessionProvider(options.provider),
+        path: options.path,
+        since: options.since,
+        limit: parsePositiveInteger(options.limit),
+        allProjects: options.allProjects
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+    }
+  );
+
+sessionCommand
+  .command("reflect")
+  .description("Generate a preview-first memory plan from coding-agent sessions.")
+  .option("--provider <provider>", "Session provider: codex or claude", "codex")
+  .option("--path <path>", "Override the provider trace directory")
+  .option("--since <duration>", "Only include sessions after an ISO date or duration such as 24h, 7d, or 2w")
+  .option("--limit <n>", "Maximum number of candidate memories to include")
+  .option("--all-projects", "Include sessions even when their cwd does not match this project", false)
+  .option("--output-plan <path>", "Write the update plan draft to a project-local JSON file")
+  .option("--force", "Overwrite the output plan if it already exists", false)
+  .option("--read-only", "Do not write output plan files", false)
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      options: {
+        provider?: string;
+        path?: string;
+        since?: string;
+        limit?: string;
+        allProjects?: boolean;
+        outputPlan?: string;
+        force?: boolean;
+        readOnly?: boolean;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await reflectAgentSessions(process.cwd(), {
+        provider: parseSessionProvider(options.provider),
+        path: options.path,
+        since: options.since,
+        limit: parsePositiveInteger(options.limit),
+        allProjects: options.allProjects,
+        outputPlan: options.outputPlan,
+        force: options.force,
+        readOnly: options.readOnly
+      });
       process.stdout.write(format === "json" ? result.json : result.markdown);
     }
   );
