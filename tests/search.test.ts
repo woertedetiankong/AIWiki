@@ -211,6 +211,27 @@ describe("searchWikiMemory", () => {
     expect(response.results[0]?.matchedFields).toContain("title");
   });
 
+  it("expands Chinese stale-memory queries to maintenance memory", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "patterns"), {
+      recursive: true
+    });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "patterns", "stale-memory.md"),
+      {
+        type: "pattern",
+        title: "Stale memory maintenance",
+        modules: ["maintain"]
+      },
+      "# Pattern: Stale memory maintenance\n\nUse maintain when `last_updated` freshness warnings show wiki pages may be stale.\n"
+    );
+
+    const response = await searchWikiMemory(rootDir, "记忆不同步怎么办");
+
+    expect(response.results[0]?.title).toBe("Stale memory maintenance");
+    expect(response.results[0]?.matchedFields).toContain("title");
+  });
+
   it("keeps path-heavy English queries useful", async () => {
     const rootDir = await tempProject();
     await setupWiki(rootDir);

@@ -21,6 +21,7 @@ describe("CLI help surface", () => {
     expect(stdout).toContain("agent [options] <task>");
     expect(stdout).toContain("guard [options] <file>");
     expect(stdout).toContain("reflect [options]");
+    expect(stdout).toContain("maintain [options]");
     expect(stdout).toContain("doctor [options]");
     expect(stdout).not.toContain("advanced");
     expect(stdout).not.toContain("codex [options]");
@@ -41,5 +42,6 @@ describe("CLI help surface", () => {
     expect(stdout).toContain("aiwiki reflect --notes <file> --save-raw");
     expect(stdout).toContain("aiwiki module export");
     expect(stdout).toContain("aiwiki eval large-repos");
+    expect(stdout).toContain("aiwiki eval usability");
   });
 });

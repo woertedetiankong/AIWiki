@@ -1,6 +1,6 @@
 # AIWiki Future Specification
 
-Status: Draft backlog, refreshed after Codex dogfood and work-graph hardening passes on 2026-05-01.
+Status: Draft backlog, refreshed after Codex-owned usability hardening on 2026-05-03.
 
 Purpose: Track optional and not-yet-implemented AIWiki capabilities separately from `SPEC.md`,
 which describes the current implemented CLI contract.
@@ -11,9 +11,10 @@ for durable memory writes, and covered by tests before it moves into `SPEC.md`.
 ## Current Dogfood Baseline
 
 The 2026-04-29 Codex dogfood pass made the current local CLI usable as an alpha
-Codex project-memory workflow, and the 2026-05-01 pass added work-graph,
-reflect, guard, doctor, and eval hardening. The following should be treated as
-implemented baseline, not future backlog:
+Codex project-memory workflow, the 2026-05-01 pass added work-graph, reflect,
+guard, doctor, and large-repo eval hardening, and the 2026-05-03 pass tightened
+the Codex-owned usability loop. The following should be treated as implemented
+baseline, not future backlog:
 
 - `brief` and `guard` can run in read-only cold-start mode before `.aiwiki/`
   exists.
@@ -55,24 +56,34 @@ implemented baseline, not future backlog:
 - `eval large-repos` provides a maintainer smoke eval for cold-start `prime`,
   `codex --team`, and representative `guard` behavior across sparse large-repo
   fixtures.
+- `eval usability` provides a local maintainer loop for natural-language resume,
+  payment guard precision, module import preview safety, and
+  maintainability/hardcoding guidance without remote providers.
+- `agent` and Codex runbooks are written for Codex as the operator; the human can
+  stay in natural language and does not need to remember the AIWiki command path.
+- Generated AIWiki commands shell-quote task text safely.
+- Dirty-file guard target ranking prefers changed source files before low-signal
+  docs, package metadata, and runtime artifacts.
+- Cold-start `brief` distinguishes built-in generic guardrails from project
+  memory so an empty project does not look like it has fake historical lessons.
+- `reflect --from-git-diff` avoids generic module drafts and append-only update
+  entries when it lacks concrete notes or reusable lessons.
 - Project scans combine built-in generated/dependency ignores, repository
   `.gitignore`, and `.aiwiki/config.json` `ignore` overrides.
 - Cold-start `brief` ranking was dogfooded and tuned on a mixed PMS repository
   and the Python `pydantic-deepagents` repository without writing `.aiwiki/` into
   those target projects.
 
-## Next Session Recommended Order
+## Next Implementation Order
 
-Start the next implementation session here before taking on larger adapters:
+Start implementation work here before taking on larger adapters:
 
-1. Run the dogfood loop on this repository:
-   `brief`, targeted `guard`, `resume`, `reflect --from-git-diff --output-plan`,
-   and `apply <plan>` preview.
-2. Improve the specificity of generated `reflect --from-git-diff` refresh
-   entries when the candidate text is too generic.
-3. Improve install/dev command ergonomics, especially Windows + npm argument
-   forwarding.
-4. Continue cross-project dogfood when changing ranking or scan heuristics.
+1. Improve Chinese/Unicode retrieval for `search`, `brief`, and `guard`.
+2. Tune `architecture audit` line-level evidence and false-positive severity.
+3. Continue real-project dogfood when changing ranking, scan heuristics, or
+   Codex-owned workflow output.
+4. Keep improving `reflect --from-git-diff` candidate specificity when new
+   dogfood cases reveal generic text.
 5. Only then consider optional adapters such as code-context, semantic memory, or
    deep-context.
 

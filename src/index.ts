@@ -131,12 +131,20 @@ export type {
   LargeRepoGuardCheck,
   LargeRepoGuardCheckResult
 } from "./large-repo-eval.js";
+export { runUsabilityEval } from "./usability-eval.js";
+export type {
+  UsabilityEvalCheck,
+  UsabilityEvalOptions,
+  UsabilityEvalResult,
+  UsabilityEvalScenarioResult
+} from "./usability-eval.js";
 export { initAIWiki } from "./init.js";
 export {
   formatLintReportMarkdown,
   lintWiki
 } from "./lint.js";
 export { appendLogEntry, formatLogEntry } from "./log.js";
+export { generateMaintenanceReview } from "./maintain.js";
 export { writeManagedFile } from "./managed-write.js";
 export {
   exportModulePack,
@@ -284,6 +292,14 @@ export type {
   LintResult,
   LintSeverity
 } from "./lint.js";
+export type {
+  MaintainOptions,
+  MaintainReflectStatus,
+  MaintainReflectSummary,
+  MaintainReport,
+  MaintainResult,
+  MaintainStatus
+} from "./maintain.js";
 export type {
   ModuleImportPreview,
   ModuleImportRisk,

@@ -351,7 +351,7 @@ function moduleFiles(moduleName: string, files: string[]): string[] {
   });
 }
 
-function inferredModuleSummary(moduleName: string, files: string[]): string {
+function inferredModuleSummary(moduleName: string): string | undefined {
   if (moduleName === "beads") {
     return "AIWiki can surface optional Beads context by reading `bd ready --json` and `bd status --json` when `.beads/` exists, without writing to Beads or reimplementing its task database.";
   }
@@ -364,9 +364,16 @@ function inferredModuleSummary(moduleName: string, files: string[]): string {
     return "Raw note persistence belongs in a shared service so notes can be preserved for review without mixing one-off source notes into curated wiki pages.";
   }
 
-  return files.length > 0
-    ? `Reflection candidate for ${moduleName} from changed files: ${files.join(", ")}.`
-    : `Reflection candidate for ${moduleName} from recent changed files.`;
+  return undefined;
+}
+
+function highRiskModuleSummary(moduleName: string, files: string[], riskyFiles: string[]): string | undefined {
+  const matchedRiskFiles = files.filter((file) => riskyFiles.includes(file));
+  if (matchedRiskFiles.length === 0) {
+    return undefined;
+  }
+
+  return `High-risk ${moduleName} changes touched ${matchedRiskFiles.join(", ")}; review whether this introduced durable module boundaries, checks, or pitfalls before confirming memory.`;
 }
 
 function relatedModules(
@@ -761,8 +768,13 @@ function buildReflectUpdatePlanDraft(
         .filter((moduleName) => !existingModuleNames.has(moduleName))
         .map((moduleName) => ({
           moduleName,
-          files: moduleFiles(moduleName, changedFiles)
+          files: moduleFiles(moduleName, changedFiles),
+          summary: noteSummary
+            ? `Reflection candidate from recent work: ${noteSummary}.`
+            : inferredModuleSummary(moduleName) ??
+              highRiskModuleSummary(moduleName, moduleFiles(moduleName, changedFiles), riskyFiles)
         }))
+        .filter((candidate) => candidate.summary)
         .sort((a, b) => {
           if (b.files.length !== a.files.length) {
             return b.files.length - a.files.length;
@@ -782,9 +794,7 @@ function buildReflectUpdatePlanDraft(
       modules: [candidate.moduleName],
       files: candidate.files,
       frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
-      summary: noteSummary
-        ? `Reflection candidate from recent work: ${noteSummary}.`
-        : inferredModuleSummary(candidate.moduleName, candidate.files)
+      summary: candidate.summary!
     });
   }
 

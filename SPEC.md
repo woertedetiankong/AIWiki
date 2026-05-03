@@ -513,6 +513,9 @@ Behavior:
 - MUST support `--no-task` to skip automatic task start/claim.
 - MUST write `.aiwiki/wiki/project-map.md` by default when the project map is missing.
 - MUST support `--no-map` to skip project-map bootstrap.
+- Generated commands in Markdown output MUST shell-quote task text safely.
+- Guard targets SHOULD prefer changed source files over low-signal docs, package metadata, and
+  runtime artifacts when many dirty files exist.
 - MUST keep `aiwiki codex "<task>"` as a hidden compatibility alias for
   `aiwiki agent "<task>" --runbook`.
 
@@ -621,6 +624,9 @@ Behavior:
 - `codex --team` SHOULD use dirty git files first, then matched brief targets, and
   then representative semantic-risk files so cold-start repositories still offer
   useful `guard` targets.
+- Payment and money-flow semantic risk warnings SHOULD require path or code evidence such as a
+  payment/checkout/billing/webhook path, amount/currency handling, or provider-flow identifiers.
+  Generic advisory strings in non-payment source files SHOULD NOT trigger payment-flow warnings.
 - MUST sort high-severity memory before lower-severity memory.
 - MUST include sections for:
   - Do Not
@@ -761,6 +767,7 @@ Behavior:
   technical operation details.
 - MUST write only when `--confirm` is provided.
 - MUST skip existing pages unless append sections are explicitly provided.
+- Confirmed append operations MUST update the target page `last_updated` value.
 - MUST update `.aiwiki/index.md` after confirmed writes.
 - MUST rebuild graph after confirmed writes unless `--no-graph` is provided.
 - MUST reject invalid frontmatter, unknown types, unsafe slugs, malformed JSON, and outside-root
@@ -1126,6 +1133,49 @@ Behavior:
 - MUST fail the command with a non-zero exit code when expected language risk signals disappear.
 - SHOULD include Python, Java, TypeScript, JavaScript, and C fixtures.
 - MUST NOT write `.aiwiki/` memory into the evaluated repository fixtures.
+
+### 6.23 `aiwiki eval usability`
+
+Usage:
+
+```bash
+aiwiki eval usability [--scenario <name...>] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST run as a maintainer regression eval for the Codex-owned daily workflow.
+- MUST NOT call a remote LLM provider.
+- MUST use temporary local projects and avoid writing durable memory into the current project.
+- MUST support filtering scenarios by name.
+- MUST fail the command with a non-zero exit code when any check fails.
+- SHOULD cover natural-language resume, payment guard precision, module import preview safety,
+  and maintainability/hardcoding guidance.
+
+### 6.24 `aiwiki maintain`
+
+Usage:
+
+```bash
+aiwiki maintain [--no-from-git-diff] [--output-plan <path>] [--force]
+                [--min-rule-count <n>] [--format markdown|json]
+```
+
+Behavior:
+
+- MUST be the Codex-owned memory maintenance review entry point.
+- MUST run doctor-style memory health checks.
+- MUST run git-diff reflection by default and MUST support `--no-from-git-diff`.
+- MUST use read-only reflection when `--output-plan` is not provided.
+- MUST NOT write structured wiki pages or confirm long-term memory writes.
+- `--output-plan` MAY write a reviewable update plan draft, but MUST NOT apply it.
+- `--output-plan` MUST NOT overwrite an existing file unless `--force` is provided.
+- When a reflect candidate targets an existing stale wiki page, `--output-plan` SHOULD convert it
+  into an explicit `Maintenance Review` append instead of leaving it as a skip-only candidate.
+- Markdown output MUST stay compact enough for Codex and include overall status, doctor counts,
+  reflect candidate count, next actions, and explicit confirmation safety.
+- JSON output MUST include the doctor report, reflect summary, next actions, and safety lines.
+- MUST set a non-zero process exit code only when memory health is blocked by lint errors.
 
 ## 7. Output Contract
 

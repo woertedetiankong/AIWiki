@@ -56,6 +56,8 @@ describe("large repo eval", () => {
 
     expect(result.passed).toBe(true);
     expect(result.markdown).toContain("Status: PASS");
+    expect(result.markdown).toContain("Guard checks: 1/1 pass");
+    expect(result.markdown).not.toContain("### Guard:");
     expect(result.fixtures[0]).toMatchObject({
       name: "local-python",
       primeInitialized: false,

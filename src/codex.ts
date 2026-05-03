@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { generateAgentContext } from "./agent.js";
 import type { AgentContextOptions } from "./agent.js";
 import { AIWikiNotInitializedError, loadAIWikiConfig } from "./config.js";
+import { changedGuardTargetsFromGitStatus } from "./git-guard-targets.js";
 import type { OutputFormat } from "./output.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { representativeRiskFiles, semanticChangeRiskMessages } from "./risk-rules.js";
+import { shellQuote } from "./shell-quote.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -53,10 +55,6 @@ export interface CodexRunbookResult {
   json: string;
 }
 
-function quote(value: string): string {
-  return `"${value.replace(/"/gu, '\\"')}"`;
-}
-
 function taskSlug(task: string): string {
   const slug = task
     .toLowerCase()
@@ -82,6 +80,7 @@ function formatSection(title: string, items: string[]): string {
 function formatTeamSection(team: CodexTeamRunbook): string[] {
   const sections = [
     "## Team Mode",
+    "- Treat this as a Codex operator checklist, not a manual command list for the human user.",
     "- Codex may delegate work to multiple agents, but AIWiki does not create or manage agents.",
     "- AIWiki provides shared memory, guardrails, reflect candidates, and handoff checks.",
     ""
@@ -99,6 +98,7 @@ function formatTeamSection(team: CodexTeamRunbook): string[] {
 
   sections.push(
     "## Handoff Rules",
+    "- Record checkpoints after meaningful progress without waiting for the user to ask.",
     "- Use checkpoint/resume for long tasks.",
     "- Final answer must report code changes, tests, and memory health."
   );
@@ -106,59 +106,8 @@ function formatTeamSection(team: CodexTeamRunbook): string[] {
   return sections;
 }
 
-function normalizeChangedFile(filePath: string): string {
-  return toPosixPath(filePath).replace(/^\.\//u, "");
-}
-
 function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
-}
-
-function statusFile(line: string): string | undefined {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const renamed = /^R\s+(.+?)\s+->\s+(.+)$/u.exec(trimmed);
-  if (renamed) {
-    return renamed[2];
-  }
-
-  const match = /^(?:[ MADRCU?!]{2})\s+(.+)$/u.exec(line);
-  return match?.[1];
-}
-
-async function changedFilesFromGitStatus(rootDir: string): Promise<string[]> {
-  let stdout = "";
-  try {
-    ({ stdout } = await execFileAsync("git", ["status", "--short"], {
-      cwd: rootDir,
-      maxBuffer: 1024 * 1024
-    }));
-  } catch {
-    return [];
-  }
-
-  const files = unique(
-    stdout
-      .split("\n")
-      .map(statusFile)
-      .map((file) => file ? normalizeChangedFile(file) : undefined)
-  );
-  const existingFiles: string[] = [];
-  for (const file of files) {
-    try {
-      const fileStat = await stat(resolveProjectPath(rootDir, file));
-      if (fileStat.isFile()) {
-        existingFiles.push(file);
-      }
-    } catch {
-      // Deleted files and ignored paths do not need file guardrails.
-    }
-  }
-
-  return existingFiles;
 }
 
 async function trackedFilesFromGit(rootDir: string): Promise<string[]> {
@@ -177,7 +126,7 @@ async function trackedFilesFromGit(rootDir: string): Promise<string[]> {
       .split("\n")
       .map((file) => file.trim())
       .filter((file) => file.length > 0)
-      .map(normalizeChangedFile)
+      .map((file) => toPosixPath(file).replace(/^\.\//u, ""))
   );
 }
 
@@ -231,6 +180,7 @@ function createTeamRunbook(task: string, initialized: boolean): CodexTeamRunbook
         name: "Implementer",
         purpose: "Make the smallest safe code change with file-level guardrails.",
         commands: [
+          "Translate the user's natural-language request into current scope and likely files.",
           "Run `aiwiki prime`.",
           initialized
             ? "Run `aiwiki task ready --format json` and claim ready work when the user wants task-graph coordination."
@@ -238,7 +188,7 @@ function createTeamRunbook(task: string, initialized: boolean): CodexTeamRunbook
           initialized
             ? "Run `aiwiki task claim <id>` only for unblocked work unless the user explicitly approves `--force`."
             : "Use cold-start `aiwiki agent` and `aiwiki guard` output instead of claiming tasks.",
-          `Run \`aiwiki agent ${quote(task)}\`.`,
+          `Run \`aiwiki agent ${shellQuote(task)}\`.`,
           "Run `aiwiki guard <file>` before editing.",
           "Make the smallest safe implementation.",
           "Run focused tests."
@@ -311,7 +261,7 @@ export async function generateCodexRunbook(
     format: options.format
   });
   const initialized = await isAIWikiInitialized(rootDir);
-  const dirtyGuardTargets = await changedFilesFromGitStatus(rootDir);
+  const dirtyGuardTargets = await changedGuardTargetsFromGitStatus(rootDir);
   const representativeGuardTargets = await representativeGuardTargetsFromGit(rootDir);
   const guardTargets = unique([
     ...dirtyGuardTargets,
@@ -321,7 +271,7 @@ export async function generateCodexRunbook(
   const planPath = `.aiwiki/context-packs/${taskSlug(task)}-reflect-plan.json`;
   const start = [
     "aiwiki prime",
-    `aiwiki agent ${quote(task)}`,
+    `aiwiki agent ${shellQuote(task)}`,
     guardTargets.length > 0
       ? `aiwiki guard ${guardTargets[0]}`
       : "aiwiki brief \"<task>\" --read-only"
@@ -363,6 +313,7 @@ export async function generateCodexRunbook(
         title: "Codex Contract",
         items: [
           "The user only needs to describe the requirement; Codex is responsible for using AIWiki.",
+          "Do not ask the user to choose AIWiki commands; translate the request into the right local memory, guard, checkpoint, and reflect steps.",
           "Use AIWiki before editing, before risky file changes, and after implementation.",
           "Never confirm long-term memory writes without explicit user approval."
         ]

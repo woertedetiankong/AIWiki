@@ -1,6 +1,7 @@
 import { generateDevelopmentBrief } from "./brief.js";
 import type { BriefOptions, DevelopmentBrief } from "./brief.js";
 import type { OutputFormat } from "./output.js";
+import { shellQuote } from "./shell-quote.js";
 
 export interface AgentContextOptions {
   limit?: number;
@@ -64,7 +65,7 @@ function nextCommands(task: string, guardTargets: string[]): string[] {
   return [
     ...commands,
     `aiwiki reflect --from-git-diff --read-only`,
-    `aiwiki brief "${task}" --read-only`
+    `aiwiki brief ${shellQuote(task)} --read-only`
   ].slice(0, 3);
 }
 
@@ -114,6 +115,7 @@ export async function generateAgentContext(
         items: [
           `Task: ${task}`,
           `Project: ${brief.projectName}`,
+          "Codex chooses the AIWiki commands; the user does not need to memorize this sequence.",
           "Context lookup is read-only; this view does not confirm long-term memory writes."
         ]
       },

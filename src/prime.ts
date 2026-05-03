@@ -1,9 +1,11 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
 import { readBeadsContext } from "./beads.js";
 import type { BeadsContext, BeadsItem } from "./beads.js";
 import { doctorWiki } from "./doctor.js";
+import {
+  changedGuardTargetsFromGitStatus,
+  rankGuardTargetFiles
+} from "./git-guard-targets.js";
 import {
   AIWikiNotInitializedError,
   createDefaultConfig,
@@ -11,8 +13,6 @@ import {
 } from "./config.js";
 import { getTaskStatus, listTasks, readyTasks } from "./task.js";
 import type { TaskMetadata } from "./types.js";
-
-const execFileAsync = promisify(execFile);
 
 export interface PrimeOptions {
   limit?: number;
@@ -82,39 +82,6 @@ function markdownBulletItems(markdown: string): string[] {
     .filter((line) => line.startsWith("- "))
     .map((line) => line.replace(/^- /u, ""))
     .filter((line) => !line.startsWith("No ") && line !== "None recorded.");
-}
-
-function statusFile(line: string): string | undefined {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const renamed = /^R\s+(.+?)\s+->\s+(.+)$/u.exec(trimmed);
-  if (renamed) {
-    return renamed[2];
-  }
-  const match = /^(?:[ MADRCU?!]{2})\s+(.+)$/u.exec(line);
-  return match?.[1];
-}
-
-async function gitStatusFiles(rootDir: string): Promise<string[]> {
-  try {
-    const { stdout } = await execFileAsync("git", ["status", "--short"], {
-      cwd: rootDir,
-      maxBuffer: 1024 * 1024
-    });
-    return [...new Set(stdout.split("\n").map(statusFile).filter((file): file is string => Boolean(file)))]
-      .filter(usefulGuardTarget)
-      .slice(0, 5);
-  } catch {
-    return [];
-  }
-}
-
-function usefulGuardTarget(file: string): boolean {
-  return file.length > 0 &&
-    !file.startsWith(".aiwiki/") &&
-    !file.endsWith(".md");
 }
 
 function memoryHealthReason(memoryHealth: PrimeContext["memoryHealth"]): string {
@@ -311,11 +278,11 @@ export async function generatePrimeContext(
   const statusGuardTargets = activeStatus
     ? markdownBulletItems(activeStatus.data.changedFiles)
     : [];
-  const workingTreeGuardTargets = await gitStatusFiles(rootDir);
-  const guardTargets = [...new Set([
-    ...statusGuardTargets,
-    ...workingTreeGuardTargets
-  ])].filter(usefulGuardTarget).slice(0, 5);
+  const workingTreeGuardTargets = await changedGuardTargetsFromGitStatus(rootDir);
+  const guardTargets = rankGuardTargetFiles([
+    ...workingTreeGuardTargets,
+    ...statusGuardTargets
+  ]);
   const beads = await readBeadsContext(rootDir, options.limit ?? 5);
   const baseContext: Omit<PrimeContext, "actions"> = {
     projectName: config.projectName,

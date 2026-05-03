@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -7,7 +7,7 @@ import {
 import { loadAIWikiConfig } from "./config.js";
 import { buildWikiGraph } from "./graph.js";
 import { appendLogEntry } from "./log.js";
-import { formatMarkdown } from "./markdown.js";
+import { formatMarkdown, readMarkdownFile } from "./markdown.js";
 import { resolveProjectPath } from "./paths.js";
 import type {
   WikiPageFrontmatter,
@@ -41,6 +41,7 @@ const wikiUpdateRiskLevelSchema = z.enum([
 const wikiUpdateSourceSchema = z.enum([
   "reflect",
   "ingest",
+  "maintain",
   "promote-rules",
   "manual"
 ]);
@@ -321,6 +322,24 @@ function appendContent(entry: WikiUpdatePlanEntry): string {
   return (entry.append ?? [])
     .map((section) => `\n\n## ${section.heading.trim()}\n\n${section.body.trimEnd()}\n`)
     .join("");
+}
+
+async function appendToExistingPage(
+  filePath: string,
+  entry: WikiUpdatePlanEntry
+): Promise<void> {
+  const existing = await readMarkdownFile<WikiPageFrontmatter>(filePath);
+  await writeFile(
+    filePath,
+    formatMarkdown(
+      {
+        ...existing.frontmatter,
+        last_updated: new Date().toISOString().slice(0, 10)
+      },
+      `${existing.body.trimEnd()}${appendContent(entry)}`
+    ),
+    "utf8"
+  );
 }
 
 function previewText(value: string, maxLength = 1200): string {
@@ -665,7 +684,7 @@ export async function applyWikiUpdatePlan(
         if (!(await pathExists(absolutePath))) {
           throw new Error(`Cannot append missing wiki page: ${operation.path}`);
         }
-        await appendFile(absolutePath, appendContent(entry), "utf8");
+        await appendToExistingPage(absolutePath, entry);
         appended.push(operation.path);
       }
     }

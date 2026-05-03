@@ -65,6 +65,104 @@ function includesAny(text: string, needles: string[]): boolean {
   return needles.some((needle) => text.includes(needle));
 }
 
+function stripJsTsTextLiterals(content: string): string {
+  let output = "";
+  let index = 0;
+  const previousSignificant = (): string | undefined => {
+    for (let cursor = output.length - 1; cursor >= 0; cursor -= 1) {
+      const char = output[cursor];
+      if (char && !/\s/u.test(char)) {
+        return char;
+      }
+    }
+
+    return undefined;
+  };
+  const isRegexStart = (): boolean => {
+    const previous = previousSignificant();
+    return !previous ||
+      /[({[=,:;!&|?+\-*~^<>]/u.test(previous) ||
+      /\b(?:return|case|throw|yield)\s*$/u.test(output);
+  };
+
+  while (index < content.length) {
+    const char = content[index];
+    const next = content[index + 1];
+
+    if (char === "/" && next === "*") {
+      output += " ";
+      index += 2;
+      while (index < content.length && !(content[index] === "*" && content[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 2;
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      output += " ";
+      index += 2;
+      while (index < content.length && content[index] !== "\n" && content[index] !== "\r") {
+        index += 1;
+      }
+      continue;
+    }
+
+    if (char === "\"" || char === "'" || char === "`") {
+      const quote = char;
+      output += " ";
+      index += 1;
+      while (index < content.length) {
+        const current = content[index];
+        if (current === "\\") {
+          index += 2;
+          continue;
+        }
+        index += 1;
+        if (current === quote) {
+          break;
+        }
+      }
+      output += " ";
+      continue;
+    }
+
+    if (char === "/" && isRegexStart()) {
+      output += " ";
+      index += 1;
+      let inCharacterClass = false;
+      while (index < content.length) {
+        const current = content[index];
+        if (current === "\\") {
+          index += 2;
+          continue;
+        }
+        if (current === "[") {
+          inCharacterClass = true;
+        } else if (current === "]") {
+          inCharacterClass = false;
+        } else if (current === "/" && !inCharacterClass) {
+          index += 1;
+          while (/[a-z]/iu.test(content[index] ?? "")) {
+            index += 1;
+          }
+          break;
+        } else if (current === "\n" || current === "\r") {
+          break;
+        }
+        index += 1;
+      }
+      output += " ";
+      continue;
+    }
+
+    output += char;
+    index += 1;
+  }
+
+  return output;
+}
+
 function matchingProjectFiles(files: string[], candidates: string[]): string[] {
   const normalizedFiles = new Map(files.map((file) => [normalize(file), file]));
   return candidates
@@ -348,6 +446,24 @@ function hasJavaWebBoundary(filePath: string, content: string): boolean {
     /@(RestController|Controller|RequestMapping|GetMapping|PostMapping|PutMapping|DeleteMapping|Path)\b/u.test(content);
 }
 
+function hasMoneyFlowPath(filePath: string): boolean {
+  const normalized = normalize(filePath);
+  return /(?:^|\/)(?:checkout|charge|billing|payment|payments|stripe|webhook|invoice|subscription)(?:[./_-]|$)/u.test(normalized);
+}
+
+function hasMoneyFlowCode(content: string): boolean {
+  const code = stripJsTsTextLiterals(content).toLowerCase();
+  const moneyIdentifiers =
+    /\b(?:charge|checkout|payment|payments|invoice|subscription|billing|stripe|webhook)\w*\b/u;
+  const amountIdentifiers =
+    /\b(?:amount|amountcents|amount_cents|currency|price|priceid|subtotal|total|tax)\b/u;
+  const codeBoundary =
+    /\b(?:export|function|async|const|let|var|class|interface|type|enum|return|await|new)\b/u;
+
+  return moneyIdentifiers.test(code) ||
+    (amountIdentifiers.test(code) && codeBoundary.test(code));
+}
+
 export function semanticChangeRisksForFile(input: SemanticRiskInput): SemanticRisk[] {
   const normalized = normalize(input.filePath);
   const lowerContent = input.content.toLowerCase();
@@ -450,10 +566,7 @@ export function semanticChangeRisksForFile(input: SemanticRiskInput): SemanticRi
 
   if (
     (language === "typescript" || language === "javascript") &&
-    (
-      includesAny(normalized, ["checkout", "charge", "billing", "payment", "stripe", "webhook", "invoice", "subscription"]) ||
-      /\b(?:charge|checkout|payment|invoice|subscription|amount(?:cents)?|currency|price|total)\b/iu.test(input.content)
-    )
+    (hasMoneyFlowPath(input.filePath) || hasMoneyFlowCode(input.content))
   ) {
     risks.push(risk({
       id: "js-ts-money-flow-boundary",

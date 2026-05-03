@@ -263,6 +263,33 @@ describe("generateFileGuardrails", () => {
     expect(checkout.markdown).toContain("checkout, charge/amount handling");
   });
 
+  it("does not surface payment risks for generic advisory text in non-payment files", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, "src", "brief.ts"),
+      [
+        "export const guidance = [",
+        "  'webhook event parsing and idempotency',",
+        "  'Focused tests should cover auth, webhooks, migrations, or billing if this task touches those domains.',",
+        "  'Money/payment flow change: cover amount/currency math before shipping.'",
+        "];"
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      path.join(rootDir, "src", "risk-rules.ts"),
+      "export const moneyPattern = /\\b(?:charge|payment|amount|currency|total)\\b/u;\n",
+      "utf8"
+    );
+
+    const brief = await generateFileGuardrails(rootDir, "src/brief.ts");
+    const riskRules = await generateFileGuardrails(rootDir, "src/risk-rules.ts");
+
+    expect(brief.markdown).not.toContain("Money/payment flow change");
+    expect(riskRules.markdown).not.toContain("Money/payment flow change");
+  });
+
   it("surfaces priority language risks for Python, Java, JS/TS, and C projects", async () => {
     const rootDir = await tempProject();
     await mkdir(path.join(rootDir, "app"), { recursive: true });

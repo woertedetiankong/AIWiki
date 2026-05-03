@@ -10,6 +10,11 @@ AIWiki is designed so users do not need to memorize every command. The intended
 workflow is: the user describes the requirement, and Codex uses AIWiki to fetch
 context, guard risky edits, and propose reviewed memory updates.
 
+On a new project, AIWiki starts with workflow scaffolding and built-in generic
+guardrails, not fake historical lessons. Project-specific memory grows from
+real checkpoints, decisions, pitfalls, and reviewed `reflect` / `apply`
+previews as development continues.
+
 ## Install
 
 Use Node.js 20, 22, or 24.
@@ -102,23 +107,33 @@ reuses the active AIWiki task and writes an initial project map when one is
 missing. Humans should not need to remember those setup commands. Use
 `--no-task` or `--no-map` only for diagnostic runs that must avoid those writes.
 
-After development, generate reviewed memory suggestions:
+After development, Codex should close the loop in a preview-first way:
 
 ```bash
-aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.json
-aiwiki apply .aiwiki/context-packs/reflect-plan.json
-aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm
+aiwiki maintain
+# If maintain reports candidate writes:
+aiwiki maintain --output-plan .aiwiki/context-packs/maintain-reflect-plan.json
+aiwiki apply .aiwiki/context-packs/maintain-reflect-plan.json
+# Only after explicit user-reviewed approval:
+aiwiki apply .aiwiki/context-packs/maintain-reflect-plan.json --confirm
 ```
 
-Only run `aiwiki apply <plan>` when `reflect` says a plan was written. `apply`
-previews by default and explains what the plan is, how many pages it would
-create, append, or skip, what each memory means in plain language, and what to
-review before confirmation. Confirmed writes only create or append supported wiki
-pages under `.aiwiki/wiki/`.
+`maintain` is the Codex-owned memory review entry point. It runs doctor-style
+memory health checks plus read-only git-diff reflection by default, then reports
+stale memory, candidate wiki writes, and the exact next command to run. Only run
+`aiwiki apply <plan>` when `maintain` or `reflect` says a plan was written.
+When an existing candidate page is stale, `maintain --output-plan` proposes an
+explicit `Maintenance Review` append instead of silently skipping it; confirmed
+appends refresh the page `last_updated` only after review.
+`apply` previews by default and explains what the plan is, how many pages it
+would create, append, or skip, what each memory means in plain language, and
+what to review before confirmation. Confirmed writes only create or append
+supported wiki pages under `.aiwiki/wiki/`.
 
 For long-running projects, periodically check memory health:
 
 ```bash
+aiwiki maintain
 aiwiki doctor
 ```
 
@@ -137,18 +152,45 @@ prints the same freshness signal so indexed results do not silently drift.
 
 ## Codex Happy Path
 
-For a new coding session, start with the smallest useful loop:
+This section is for Codex and maintainers. A normal user can stay in natural
+language, such as "continue the unfinished work" or "implement this without
+hardcoding"; Codex should choose the AIWiki commands and report the result.
+
+For a new Codex session, use this checklist. The user can stay in natural
+language; Codex runs the commands and reports the result.
+
+1. Start with project memory and the next action.
 
 ```bash
 aiwiki prime
-aiwiki agent "implement the next feature" --runbook
-aiwiki agent "implement the next feature"
-aiwiki guard src/path/to/file.ts
-aiwiki checkpoint --step "implemented core behavior" --status done
-aiwiki resume
-aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.json
-aiwiki apply .aiwiki/context-packs/reflect-plan.json  # only if reflect wrote the plan
+aiwiki resume --read-only
 ```
+
+2. Turn the user's request into an actionable runbook.
+
+```bash
+aiwiki agent "implement the next feature" --runbook
+```
+
+3. Before editing each concrete source file, run guard and keep the output
+short enough to act on.
+
+```bash
+aiwiki guard src/path/to/file.ts
+```
+
+4. After implementation and tests, record handoff state and review memory.
+
+```bash
+aiwiki checkpoint --step "implemented core behavior" --status done
+aiwiki maintain
+# If maintain reports candidate writes:
+aiwiki maintain --output-plan .aiwiki/context-packs/maintain-reflect-plan.json
+aiwiki apply .aiwiki/context-packs/maintain-reflect-plan.json
+```
+
+Do not run `aiwiki apply <plan> --confirm` until the user explicitly approves
+the previewed memory updates.
 
 When Codex only needs context and should not write runtime logs, eval cases,
 task resume files, or output plans, use the pure read-only variant:
@@ -183,7 +225,9 @@ whose `files` frontmatter references changed code. Freshness refreshes stay
 advisory unless notes or diff heuristics produce a concrete reusable lesson,
 which keeps update plans reviewable instead of filling memory with generic
 append entries. These are still candidates: use `aiwiki apply <plan.json>` to
-preview and only confirm after review.
+preview and only confirm after review. Generic entries such as "Reflection
+candidate for X" should be revised into concrete durable lessons or rejected
+before confirmation.
 
 `checkpoint` is optimized for handoff by default. When git is available, it
 captures changed files from `git diff` and `git status`; if `--tests` or
@@ -249,6 +293,7 @@ aiwiki search "<query>" [--type <type>] [--limit <n>] [--index] [--format markdo
 aiwiki brief "<task>" [--limit <n>] [--output <path>] [--force] [--with-graphify] [--architecture-guard] [--read-only] [--format markdown|json]
 aiwiki guard <file> [--limit <n>] [--with-graphify] [--architecture-guard] [--format markdown|json]
 aiwiki map [--write] [--force] [--format markdown|json]
+aiwiki maintain [--no-from-git-diff] [--output-plan <path>] [--force] [--min-rule-count <n>] [--format markdown|json]
 aiwiki reflect [--from-git-diff] [--notes <path>] [--save-raw] [--limit <n>] [--output-plan <path>] [--force] [--read-only] [--format markdown|json]
 aiwiki apply <plan.json> [--confirm] [--no-graph] [--format markdown|json]
 aiwiki lint [--format markdown|json]
@@ -287,12 +332,17 @@ aiwiki promote-rules [--min-count <n>] [--format markdown|json]
 aiwiki decision "<decision>" [--module <module>] [--format markdown|json]
 aiwiki blocker "<blocker>" [--severity low|medium|high|critical] [--format markdown|json]
 aiwiki eval large-repos [--cache-dir <path>] [--fixture <name...>] [--skip-clone] [--format markdown|json]
+aiwiki eval usability [--scenario <name...>] [--format markdown|json]
 ```
 
 `aiwiki eval large-repos` is a maintainer smoke test, not part of the normal
 daily coding loop. It sparse-checks out representative large open-source
 repositories into a cache directory, runs `prime`, `agent --runbook --team`,
 and `guard`, then fails if the expected language risk signals disappear.
+`aiwiki eval usability` is the tiny local Codex-owned workflow loop: it simulates
+natural-language requests for resume, payment guard precision, module import
+preview safety, maintainability/hardcoding guidance, and maintain stale-memory
+review without calling an LLM provider.
 
 ## Project Layout
 
@@ -304,9 +354,10 @@ Important source files:
 - `src/templates.ts`: default `.aiwiki/` Markdown and prompt templates.
 - `src/managed-write.ts`: non-overwrite and forceable-template write policy.
 - `src/hybrid-index.ts`: derived SQLite wiki index and JSONL snapshot generation.
-- `src/brief.ts`, `src/guard.ts`, `src/reflect.ts`, `src/ingest.ts`, `src/apply.ts`: core memory workflow services.
+- `src/brief.ts`, `src/guard.ts`, `src/maintain.ts`, `src/reflect.ts`, `src/ingest.ts`, `src/apply.ts`: core memory workflow services.
 - `src/errors.ts`, `src/risk-rules.ts`: structured JSON CLI errors and reusable semantic risk heuristics.
-- `src/graph.ts`, `src/graphify.ts`, `src/architecture.ts`, `src/module-pack.ts`, `src/task.ts`, `src/prime.ts`, `src/schema.ts`, `src/large-repo-eval.ts`: graph, external context, architecture, module portability, task work graph, startup dashboard, agent-facing schemas, and large-repository smoke evals.
+- `src/graph.ts`, `src/graphify.ts`, `src/architecture.ts`, `src/module-pack.ts`, `src/task.ts`, `src/prime.ts`, `src/schema.ts`, `src/large-repo-eval.ts`, `src/usability-eval.ts`: graph, external context, architecture, module portability, task work graph, startup dashboard, agent-facing schemas, large-repository smoke evals, and Codex-owned usability evals.
+- `src/shell-quote.ts`, `src/git-guard-targets.ts`: shared helpers for shell-safe generated commands and source-first dirty-file guard target ranking.
 
 Product and implementation documents:
 

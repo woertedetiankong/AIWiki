@@ -55,6 +55,10 @@ const QUERY_SYNONYMS: Array<{
   { match: /中文|汉字|cjk|unicode|编码/iu, tokens: ["chinese", "cjk", "unicode"] },
   { match: /工作流|流程|路径/iu, tokens: ["workflow", "path"] },
   { match: /记忆|知识|上下文/iu, tokens: ["memory", "context"] },
+  {
+    match: /过期|陈旧|过时|失效|不同步|没同步|未同步|stale/iu,
+    tokens: ["stale", "freshness", "last_updated", "maintain", "maintenance"]
+  },
   { match: /规则|约束|护栏|风险|踩坑/iu, tokens: ["rule", "guard", "risk", "pitfall"] },
   { match: /维护|体检|健康|检查/iu, tokens: ["maintenance", "doctor", "lint"] },
   { match: /测试|验证|回归/iu, tokens: ["test", "verification", "regression"] },

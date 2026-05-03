@@ -326,6 +326,11 @@ describe("generateReflectPreview", () => {
         })
       ])
     );
+    expect(
+      result.preview.updatePlanDraft?.entries.some((entry) =>
+        entry.summary?.includes("Reflection candidate for")
+      )
+    ).toBe(false);
   });
 
   it("extracts optional Beads and raw-note ingest lessons from git diff", async () => {

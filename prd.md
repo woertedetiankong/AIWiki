@@ -1,6 +1,6 @@
 # PRD: AIWiki
 
-Status: Current product direction as of 2026-05-01.
+Status: Current product direction as of 2026-05-03.
 
 AIWiki is a local-first project memory and context compiler for AI coding agents.
 It stores durable project knowledge in `.aiwiki/` and turns that knowledge into
@@ -75,7 +75,7 @@ checks, graph relations, and architecture signals before editing a file.
 ```bash
 aiwiki reflect --from-git-diff --output-plan .aiwiki/context-packs/reflect-plan.json
 aiwiki apply .aiwiki/context-packs/reflect-plan.json
-aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm
+aiwiki apply .aiwiki/context-packs/reflect-plan.json --confirm  # only after reviewed approval
 ```
 
 Reflect generates preview-only update suggestions. Apply previews by default and
@@ -156,6 +156,7 @@ The current CLI includes:
 - `decision`
 - `blocker`
 - `eval large-repos`
+- `eval usability`
 
 See `README.md` for command usage and `SPEC.md` for exact behavior.
 
@@ -184,7 +185,8 @@ See `README.md` for command usage and `SPEC.md` for exact behavior.
 Near-term:
 
 - Continue Codex usability tuning from real-project dogfood.
-- Review and improve the specificity of `reflect --from-git-diff` memory refresh and semantic-risk candidates.
+- Improve Chinese/Unicode retrieval and keep Codex-owned usability evals guarding the daily workflow.
+- Continue improving the specificity of `reflect --from-git-diff` memory refresh and semantic-risk candidates.
 - `aiwiki lint --fix` for low-risk index/backlink/format repair.
 - Graph hotspots and conflicts using the existing graph model.
 - Retrieval feedback and tuning for brief, guard, reflect, and module workflows.
@@ -199,13 +201,13 @@ Later:
 - Optional deep-context / recursive investigation.
 - MCP server after the local Markdown workflow remains stable.
 
-## Next Session Focus
+## Next Development Focus
 
-The next development session should not start with large systems from
-`SPEC-FUTURE.md`. The 2026-04-29 dogfood pass already made cold-start `brief`
-and `guard` useful across AIWiki, a mixed PMS repository, and a Python
-Pydantic-deepagents repository. Next, tighten the remaining local Markdown
-workflow before adding optional adapters.
+The next development work should not start with large systems from
+`SPEC-FUTURE.md`. The 2026-04-29 and 2026-05-02 dogfood passes made cold-start
+`brief`/`guard`, the Codex-owned `agent` path, and the local usability eval loop
+usable enough to protect further tuning. Next, tighten the remaining local
+Markdown workflow before adding optional adapters.
 
 ### 1. Reflect-Driven Freshness
 

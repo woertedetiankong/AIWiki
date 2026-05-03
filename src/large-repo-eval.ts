@@ -304,18 +304,26 @@ async function evaluateFixture(
 }
 
 function formatFixtureMarkdown(result: LargeRepoFixtureResult): string[] {
+  const passedGuardChecks = result.guardChecks.filter((check) => check.passed).length;
+  const guardTargetSample = result.guardTargets.slice(0, 3);
+  const omittedGuardTargets = result.guardTargets.length - guardTargetSample.length;
   const lines = [
     `## ${result.name}`,
     "",
     `- Status: ${result.passed ? "PASS" : "FAIL"}`,
     `- Repo: ${result.repoUrl}`,
     `- Checkout: ${result.repoDir}`,
-    `- Prime cold-start: ${result.primeInitialized ? "FAIL" : "PASS"}`,
-    `- Codex cold-start: ${result.codexInitialized ? "FAIL" : "PASS"}`,
-    `- Guard targets: ${result.guardTargets.length > 0 ? result.guardTargets.join(", ") : "none"}`
+    `- Cold-start checks: prime ${result.primeInitialized ? "FAIL" : "PASS"}, codex ${result.codexInitialized ? "FAIL" : "PASS"}`,
+    `- Guard targets: ${result.guardTargets.length > 0
+      ? `${result.guardTargets.length} (${guardTargetSample.join(", ")}${omittedGuardTargets > 0 ? `, +${omittedGuardTargets} more` : ""})`
+      : "none"}`,
+    `- Guard checks: ${passedGuardChecks}/${result.guardChecks.length} pass`
   ];
 
   for (const check of result.guardChecks) {
+    if (check.passed) {
+      continue;
+    }
     lines.push(
       "",
       `### Guard: ${check.file}`,
@@ -343,7 +351,7 @@ function formatLargeRepoEvalMarkdown(result: Omit<LargeRepoEvalResult, "markdown
     `Status: ${result.passed ? "PASS" : "FAIL"}`,
     `Cache: ${result.cacheDir}`,
     "",
-    ...result.fixtures.flatMap(formatFixtureMarkdown)
+    ...result.fixtures.flatMap((fixture) => [...formatFixtureMarkdown(fixture), ""])
   ].join("\n").trimEnd() + "\n";
 }
 

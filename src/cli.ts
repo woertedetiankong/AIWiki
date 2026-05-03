@@ -27,6 +27,7 @@ import {
 import { resolveProjectPath } from "./paths.js";
 import { runLargeRepoEval } from "./large-repo-eval.js";
 import { lintWiki } from "./lint.js";
+import { generateMaintenanceReview } from "./maintain.js";
 import {
   exportModulePack,
   generateModuleImportPreview,
@@ -39,6 +40,7 @@ import { generateRulePromotionPreview } from "./promote-rules.js";
 import { generateReflectPreview } from "./reflect.js";
 import { getSchemaResult, parseSchemaName } from "./schema.js";
 import { searchWikiMemory } from "./search.js";
+import { runUsabilityEval } from "./usability-eval.js";
 import {
   addTaskDependency,
   checkpointTask,
@@ -279,6 +281,7 @@ function formatAdvancedHelp(): string {
     "",
     "## Maintainer Evals",
     "- aiwiki eval large-repos",
+    "- aiwiki eval usability",
     ""
   ].join("\n");
 }
@@ -604,6 +607,30 @@ evalCommand
     }
   );
 
+evalCommand
+  .command("usability")
+  .description("Run local Codex-owned workflow usability scenarios.")
+  .option("--scenario <name...>", "Scenario name(s) to run; can be repeated or comma-separated")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      options: {
+        scenario?: string[];
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await runUsabilityEval({
+        scenarioNames: parseFixtureNames(options.scenario),
+        format
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+      if (!result.passed) {
+        process.exitCode = 1;
+      }
+    }
+  );
+
 const moduleCommand = program
   .command("module", { hidden: true })
   .description("Export and import portable AIWiki module memory.");
@@ -688,6 +715,39 @@ moduleCommand
     const result = await lintModuleMemory(process.cwd(), moduleName);
     process.stdout.write(format === "json" ? result.json : result.markdown);
   });
+
+program
+  .command("maintain")
+  .description("Review AIWiki memory health and candidate updates for Codex.")
+  .option("--no-from-git-diff", "Skip git-diff reflection and only run memory health checks")
+  .option("--output-plan <path>", "Write a reviewable candidate memory update plan")
+  .option("--force", "Overwrite the output plan if it already exists", false)
+  .option("--min-rule-count <n>", "Minimum pitfall encountered_count for rule promotion candidates")
+  .option("--format <format>", "Output format: markdown or json", "markdown")
+  .action(
+    async (
+      options: {
+        fromGitDiff?: boolean;
+        outputPlan?: string;
+        force?: boolean;
+        minRuleCount?: string;
+        format?: string;
+      }
+    ) => {
+      const format = parseOutputFormat(options.format);
+      const result = await generateMaintenanceReview(process.cwd(), {
+        fromGitDiff: options.fromGitDiff,
+        outputPlan: options.outputPlan,
+        force: options.force,
+        minRulePromotionCount: parsePositiveInteger(options.minRuleCount)
+      });
+      process.stdout.write(format === "json" ? result.json : result.markdown);
+
+      if (result.report.status === "blocked") {
+        process.exitCode = 1;
+      }
+    }
+  );
 
 program
   .command("reflect")

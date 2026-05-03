@@ -62,8 +62,9 @@ describe("generateCodexRunbook", () => {
 
     expect(result.markdown).toContain("# Codex AIWiki Runbook");
     expect(result.markdown).toContain("The user only needs to describe the requirement");
+    expect(result.markdown).toContain("Do not ask the user to choose AIWiki commands");
     expect(parsed.commands.start).toContain("aiwiki prime");
-    expect(parsed.commands.start).toContain('aiwiki agent "improve search memory"');
+    expect(parsed.commands.start).toContain("aiwiki agent 'improve search memory'");
     expect(result.markdown).toContain("Use `aiwiki task ready`");
     expect(parsed.guardTargets).toContain("src/search.ts");
     expect(parsed.commands.afterEditing).toContain("aiwiki reflect --from-git-diff --read-only");
@@ -96,13 +97,16 @@ describe("generateCodexRunbook", () => {
     };
 
     expect(result.markdown).toContain("## Team Mode");
+    expect(result.markdown).toContain("Codex operator checklist");
     expect(result.markdown).toContain("AIWiki does not create or manage agents");
     expect(result.markdown).toContain("## Implementer Agent");
+    expect(result.markdown).toContain("Translate the user's natural-language request");
     expect(result.markdown).toContain("aiwiki task ready --format json");
     expect(result.markdown).toContain("blocked tasks require explicit `--force`");
     expect(result.markdown).toContain("## Reviewer Agent");
     expect(result.markdown).toContain("## Memory Steward Agent");
     expect(result.markdown).toContain("## Handoff Rules");
+    expect(result.markdown).toContain("Record checkpoints after meaningful progress");
     expect(parsed.team?.enabled).toBe(true);
     expect(parsed.team?.roles.map((role) => role.name)).toEqual([
       "Implementer",
@@ -112,6 +116,24 @@ describe("generateCodexRunbook", () => {
     expect(parsed.team?.roles.flatMap((role) => role.mustNot).join("\n")).toContain(
       "without user approval"
     );
+  });
+
+  it("shell-quotes task text in runbook commands", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    const result = await generateCodexRunbook(rootDir, "fix $(echo unsafe) and don't break quotes", {
+      team: true
+    });
+    const commands = [
+      ...result.runbook.commands.start,
+      ...result.runbook.team!.roles.flatMap((role) => role.commands)
+    ].join("\n");
+
+    expect(commands).toContain(
+      "aiwiki agent 'fix $(echo unsafe) and don'\\''t break quotes'"
+    );
+    expect(commands).not.toContain('aiwiki agent "fix $(echo unsafe)');
   });
 
   it("prioritizes dirty git files as guard targets", async () => {
@@ -130,8 +152,8 @@ describe("generateCodexRunbook", () => {
     });
 
     expect(result.runbook.guardTargets.slice(0, 2)).toEqual([
-      "src/layout.tsx",
-      "src/new-widget.tsx"
+      "src/new-widget.tsx",
+      "src/layout.tsx"
     ]);
     expect(result.markdown).toContain("aiwiki guard src/layout.tsx");
     expect(result.markdown).toContain("aiwiki guard src/new-widget.tsx");

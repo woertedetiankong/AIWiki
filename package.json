@@ -41,6 +41,7 @@
     "dev": "tsx src/cli.ts",
     "dev:aiwiki": "tsx src/cli.ts",
     "eval:large-repos": "npm run build && node dist/cli.js eval large-repos",
+    "eval:usability": "npm run build && node dist/cli.js eval usability",
     "pack:dry-run": "npm pack --dry-run",
     "prepack": "npm run build",
     "prepublishOnly": "npm run release:check",

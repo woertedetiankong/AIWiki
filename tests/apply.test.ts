@@ -218,6 +218,7 @@ describe("applyWikiUpdatePlan", () => {
     );
     expect(rule).toContain("Original user text.");
     expect(rule).toContain("Check permissions before returning auth data.");
+    expect(rule).toContain("last_updated:");
   });
 
   it("rejects malformed JSON, invalid paths, unknown types, and invalid frontmatter", async () => {

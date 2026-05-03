@@ -172,6 +172,8 @@ Acceptance criteria:
 
 ## Priority 4: Add a First-Class Agent Entry Point
 
+Status: implemented and continuing to refine from dogfood.
+
 The command list is broad. AI agents need one obvious default command that
 collects the right context without making them choose between many subcommands.
 
@@ -195,6 +197,11 @@ Implemented behavior:
   task/project-map preparation for Codex.
 - `prime` summarizes active work, ready work, memory health, and next commands.
 - `schema` exposes machine-readable task/event/prime contracts.
+- generated commands shell-quote task text safely;
+- dirty working-tree guard targets are ranked so source files surface before
+  low-signal docs, package metadata, and runtime artifacts;
+- `agent --runbook --team` is written as a Codex operator checklist, not a human
+  command manual.
 
 Acceptance criteria:
 
@@ -204,11 +211,16 @@ Acceptance criteria:
 
 ## Priority 5: Make Guardrails More Specific
 
-Status: first slice implemented.
+Status: second slice implemented.
 
 `guard` now helps sparse-memory projects by suggesting nearby tests, reporting
 file signals, recommending file notes only for useful targets, and surfacing
 built-in semantic change risks.
+
+The 2026-05-03 usability pass fixed a clear trust issue: generic payment or
+webhook advisory strings in non-payment files no longer trigger the
+money/payment semantic risk warning, while payment paths and amount/currency
+handling code are still guarded.
 
 Remaining planned work:
 
@@ -245,12 +257,17 @@ Acceptance criteria:
 
 ## Priority 7: Reflect-Driven Freshness
 
-Status: first slice implemented.
+Status: second slice implemented.
 
 `reflect --from-git-diff` now includes untracked files from `git status`, maps
 changed files back to related wiki pages, suggests freshness refresh entries,
 and extracts concrete work-graph and semantic-risk lessons when local heuristics
 can infer them.
+
+The 2026-05-03 usability pass also reduced generic update-plan noise: `reflect`
+now avoids creating module drafts or append entries solely because a file path
+changed unless there are notes, high-risk evidence, or a concrete reusable
+lesson.
 
 Remaining planned work:
 
@@ -284,9 +301,12 @@ Markdown CLI dependable.
 
 1. Fix Unicode and Chinese retrieval.
 2. Tune `architecture audit` findings and add line-level evidence.
-3. Improve `reflect --from-git-diff` candidate specificity from dogfood.
-4. Continue improving `guard` related-file and semantic-risk precision.
-5. Tighten README and dev command ergonomics.
+3. Continue improving `guard` related-file and semantic-risk precision from
+   real-project dogfood.
+4. Improve Windows/dev command ergonomics only when dogfood reveals a concrete
+   copy-paste failure.
+5. Keep `reflect --from-git-diff` candidate specificity under the usability and
+   dogfood loop instead of adding broad memory automation.
 
 ## Verification Checklist
 
@@ -304,6 +324,7 @@ For Codex-facing workflow changes, also dogfood:
 aiwiki brief "<task>" --read-only
 aiwiki guard <changed-file>
 aiwiki reflect --from-git-diff --read-only
+aiwiki eval usability
 ```
 
 The work is not done if the output is technically correct but too noisy for a

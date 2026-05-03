@@ -5,6 +5,18 @@ This file summarizes the implementation history that used to live in root-level
 
 ## 2026-05-02
 
+### Codex-Owned Usability Loop
+
+- Added a hidden `aiwiki eval usability` maintainer loop covering natural-language resume, payment guard precision, module import preview safety, and maintainability/hardcoding requests.
+- Tuned money/payment semantic risk detection so generic advisory text in non-payment files no longer triggers payment-flow warnings, while real checkout/amount/currency paths remain guarded.
+- Updated `agent` and Codex runbooks so AIWiki reads as Codex-owned workflow support, not a command list the human user must operate.
+- Added shell-safe quoting for generated AIWiki commands.
+- Ranked dirty working-tree guard targets so changed source files surface before low-signal docs, package metadata, and runtime artifacts.
+- Clarified cold-start behavior: AIWiki starts with workflow scaffolding and built-in generic guardrails, not fabricated project history.
+- Reduced generic `reflect --from-git-diff` memory candidates so update plans prefer concrete reusable lessons over append text such as "Reflection candidate for X".
+- Added `aiwiki maintain` as a Codex-owned memory maintenance review that combines doctor checks, read-only reflection, optional output-plan generation, stale-page refresh append proposals, and explicit apply-confirmation safety.
+- Verified the loop with `npm run typecheck`, `npm run test`, `npm run build`, and `npm run dev:aiwiki -- eval usability`.
+
 ### npm Release
 
 - Published the first public npm package as `@superwoererte/aiwiki@0.1.0`.

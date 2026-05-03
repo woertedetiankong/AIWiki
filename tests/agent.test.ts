@@ -49,11 +49,26 @@ describe("generateAgentContext", () => {
     };
 
     expect(result.markdown).toContain("# AIWiki Agent Context");
+    expect(result.markdown).toContain("Codex chooses the AIWiki commands");
     expect(result.markdown).toContain("Context lookup is read-only");
     expect(parsed.guardTargets).toContain("src/brief.ts");
     expect(parsed.nextCommands.join("\n")).toContain("aiwiki guard src/brief.ts");
     expect(await readFile(path.join(rootDir, ".aiwiki", "log.md"), "utf8")).toBe(initialLog);
     expect(await readFile(path.join(rootDir, ".aiwiki", "evals", "brief-cases.jsonl"), "utf8")).toBe(initialEvals);
+  });
+
+  it("shell-quotes task text in generated commands", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    const result = await generateAgentContext(rootDir, "fix $(echo unsafe) and don't break quotes");
+
+    expect(result.context.nextCommands.join("\n")).toContain(
+      "aiwiki brief 'fix $(echo unsafe) and don'\\''t break quotes' --read-only"
+    );
+    expect(result.context.nextCommands.join("\n")).not.toContain(
+      'aiwiki brief "fix $(echo unsafe)'
+    );
   });
 
   it("exposes the agent command through the CLI", async () => {

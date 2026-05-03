@@ -76,6 +76,56 @@ describe("risk rules", () => {
     ).toContain("C memory-safety-sensitive change");
   });
 
+  it("does not treat generic payment advisory text as a money-flow code change", () => {
+    const files = ["src/brief.ts", "src/risk-rules.ts"];
+    const advisoryText = [
+      "const testHints = [",
+      "  taskText.includes('webhook') ? 'webhook event parsing and idempotency' : undefined,",
+      "  'Focused tests should cover auth, webhooks, migrations, or billing if this task touches those domains.',",
+      "  'Money/payment flow change: cover amount/currency math before shipping.'",
+      "];"
+    ].join("\n");
+
+    expect(
+      semanticChangeRiskMessages({
+        filePath: "src/brief.ts",
+        content: advisoryText,
+        files
+      }).join("\n")
+    ).not.toContain("Money/payment flow change");
+
+    expect(
+      semanticChangeRiskMessages({
+        filePath: "src/risk-rules.ts",
+        content: "const pattern = /\\b(?:charge|payment|amount|currency|total)\\b/u;\n",
+        files
+      }).join("\n")
+    ).not.toContain("Money/payment flow change");
+  });
+
+  it("keeps money-flow warnings for payment paths and amount handling code", () => {
+    const files = [
+      "src/app/api/stripe/webhook/route.ts",
+      "src/checkout.ts"
+    ];
+
+    expect(
+      semanticChangeRiskMessages({
+        filePath: "src/app/api/stripe/webhook/route.ts",
+        content: "export async function POST() { return new Response('ok'); }\n",
+        files
+      }).join("\n")
+    ).toContain("Money/payment flow change");
+
+    expect(
+      semanticChangeRiskMessages({
+        filePath: "src/checkout.ts",
+        content: "export function chargeOrder(amountCents: number, currency: string) { return { amountCents, currency }; }\n",
+        files
+      }).join("\n")
+    ).toContain("Money/payment flow change");
+  });
+
   it("converts priority language risk hits into reflect lessons", () => {
     const changedFiles = [
       "pyproject.toml",

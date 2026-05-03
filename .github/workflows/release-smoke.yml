@@ -16,6 +16,33 @@ on:
   workflow_dispatch:
 
 jobs:
+  release-check:
+    name: release:check + Codex eval
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Release check
+        run: npm run release:check
+
+      - name: Codex-owned workflow eval
+        run: npm run eval:usability -- --format json
+
   pack-install-smoke:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}

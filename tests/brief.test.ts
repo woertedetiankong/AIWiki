@@ -222,6 +222,9 @@ describe("generateDevelopmentBrief", () => {
     expect(sectionTitles).toContain("Hardcoding and Configuration Risks");
     expect(sectionTitles).toContain("Portability Checklist");
     expect(sectionTitles).toContain("Module Memory to Maintain");
+    expect(result.markdown).toContain("## Built-In Generic Guardrails");
+    expect(result.markdown).toContain("## Other Context");
+    expect(result.markdown).toContain("No additional context matched this task.");
     expect(result.markdown).toContain("No large-file structure warnings detected.");
     expect(result.markdown).toContain("more item(s) omitted from markdown");
     expect(parsed.sections.find(

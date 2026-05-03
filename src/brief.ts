@@ -714,6 +714,7 @@ const MARKDOWN_SECTION_LIMITS: ReadonlyMap<string, number> = new Map([
   ["Rules", 8],
   ["Pitfalls", 8],
   ["Architecture Guard", 6],
+  ["Built-In Generic Guardrails", 8],
   ["Graphify Context", 8],
   ["Other Context", 8]
 ] as const);
@@ -770,7 +771,9 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
   ].filter((item): item is string => Boolean(item));
   const otherContext = [
     ...modules.map((item) => `Module: ${item}`),
-    ...highRiskFiles.map((item) => `High-risk file: ${item}`),
+    ...highRiskFiles.map((item) => `High-risk file: ${item}`)
+  ];
+  const genericGuardrails = [
     ...sectionItems(brief, "Architecture Boundaries"),
     ...sectionItems(brief, "Hardcoding and Configuration Risks"),
     ...sectionItems(brief, "Portability Checklist"),
@@ -827,6 +830,13 @@ export function formatDevelopmentBriefMarkdown(brief: DevelopmentBrief): string 
     ...(architectureGuard.length > 0
       ? [{ title: "Architecture Guard", items: architectureGuard }]
       : []),
+    {
+      title: "Built-In Generic Guardrails",
+      items: compactItems(
+        genericGuardrails,
+        "No built-in generic guardrails matched this task."
+      )
+    },
     ...(graphify.length > 0
       ? [{ title: "Graphify Context", items: graphify }]
       : []),

@@ -107,6 +107,35 @@ describe("AIWiki prime", () => {
     expect(result.context.actions.some((action) => action.kind === "guard_target")).toBe(true);
   });
 
+  it("prioritizes source guard targets when many files are dirty", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeFile(path.join(rootDir, "README.md"), "# Demo\n", "utf8");
+    await writeFile(path.join(rootDir, "package.json"), "{\"scripts\":{\"test\":\"vitest\"}}\n", "utf8");
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await mkdir(path.join(rootDir, "tests"), { recursive: true });
+    for (const file of ["agent", "cli", "codex", "index", "risk-rules"]) {
+      await writeFile(path.join(rootDir, "src", `${file}.ts`), `export const ${file.replace(/-/gu, "")} = true;\n`, "utf8");
+      await writeFile(path.join(rootDir, "tests", `${file}.test.ts`), "export const testFile = true;\n", "utf8");
+    }
+    await initGitProject(rootDir);
+    await writeFile(path.join(rootDir, "README.md"), "# Demo\n\nUpdated.\n", "utf8");
+    await writeFile(path.join(rootDir, "package.json"), "{\"scripts\":{\"test\":\"vitest\",\"build\":\"tsc\"}}\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "agent.ts"), "export const agent = false;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "cli.ts"), "export const cli = false;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "codex.ts"), "export const codex = false;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "index.ts"), "export const index = false;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "risk-rules.ts"), "export const riskrules = false;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "usability-eval.ts"), "export const usability = true;\n", "utf8");
+
+    const result = await generatePrimeContext(rootDir);
+
+    expect(result.context.guardTargets).toContain("src/usability-eval.ts");
+    expect(result.context.guardTargets).toContain("src/risk-rules.ts");
+    expect(result.context.guardTargets).not.toContain("README.md");
+    expect(result.context.guardTargets).not.toContain("package.json");
+  });
+
   it("reads Beads ready work when .beads exists without owning the task database", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
