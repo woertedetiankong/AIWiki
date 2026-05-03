@@ -128,7 +128,8 @@ appends refresh the page `last_updated` only after review.
 `apply` previews by default and explains what the plan is, how many pages it
 would create, append, or skip, what each memory means in plain language, and
 what to review before confirmation. Confirmed writes only create or append
-supported wiki pages under `.aiwiki/wiki/`.
+supported memory pages under `.aiwiki/wiki/`, then refresh derived AIWiki log
+and graph data when writes occur.
 
 For long-running projects, periodically check memory health:
 
@@ -163,8 +164,13 @@ language; Codex runs the commands and reports the result.
 
 ```bash
 aiwiki prime
+# If an active task exists:
 aiwiki resume --read-only
 ```
+
+If `resume` reports that no active task exists, continue with `agent` or
+`brief` for the user's current request; `agent` can start or reuse the local
+AIWiki task when the session should keep task continuity.
 
 2. Turn the user's request into an actionable runbook.
 

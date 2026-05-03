@@ -1,6 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadAIWikiConfig } from "./config.js";
+import { AIWIKI_VERSION } from "./constants.js";
 import { parseMarkdown } from "./markdown.js";
 import { resolveProjectPath } from "./paths.js";
 import { normalizeRawNoteSourcePath, saveRawNote } from "./raw-notes.js";
@@ -224,7 +225,7 @@ function buildIngestUpdatePlanDraft(
   }
 
   return {
-    version: "0.1.0",
+    version: AIWIKI_VERSION,
     title: `Ingest: ${title}`,
     entries
   };

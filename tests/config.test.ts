@@ -6,6 +6,7 @@ import {
   AIWikiNotInitializedError,
   loadAIWikiConfig
 } from "../src/config.js";
+import { AIWIKI_VERSION } from "../src/constants.js";
 
 async function tempProject(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "aiwiki-config-"));
@@ -33,7 +34,7 @@ describe("loadAIWikiConfig", () => {
 
     const config = await loadAIWikiConfig(rootDir);
 
-    expect(config.version).toBe("0.1.0");
+    expect(config.version).toBe(AIWIKI_VERSION);
     expect(config.provider).toBe("none");
     expect(config.tokenBudget.brief).toBe(8000);
     expect(config.rulesTargets.agentsMd).toBe(true);

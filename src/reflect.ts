@@ -8,6 +8,7 @@ import {
   loadAIWikiConfig
 } from "./config.js";
 import {
+  AIWIKI_VERSION,
   LOCAL_ARTIFACT_IGNORE,
   REFLECT_EVALS_PATH,
   RISK_FILE_KEYWORDS
@@ -868,7 +869,7 @@ function buildReflectUpdatePlanDraft(
     : undefined;
 
   return {
-    version: "0.1.0",
+    version: AIWIKI_VERSION,
     title: noteSummary ? `Reflect: ${noteSummary}` : lessonTitle ?? "Reflect update candidates",
     entries: dedupedEntries
   };

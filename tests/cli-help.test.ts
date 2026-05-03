@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -15,6 +16,15 @@ function cliArgs(...args: string[]): string[] {
 }
 
 describe("CLI help surface", () => {
+  it("keeps the CLI version aligned with package metadata", async () => {
+    const { version } = JSON.parse(
+      await readFile(path.resolve("package.json"), "utf8")
+    ) as { version: string };
+    const { stdout } = await execFileAsync(process.execPath, cliArgs("--version"));
+
+    expect(stdout.trim()).toBe(version);
+  });
+
   it("keeps top-level help focused on daily and maintenance commands", async () => {
     const { stdout } = await execFileAsync(process.execPath, cliArgs("--help"));
 

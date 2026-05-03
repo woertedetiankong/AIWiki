@@ -1,5 +1,5 @@
 import { loadAIWikiConfig } from "./config.js";
-import { DEFAULT_RULE_PROMOTION_MIN_COUNT } from "./constants.js";
+import { AIWIKI_VERSION, DEFAULT_RULE_PROMOTION_MIN_COUNT } from "./constants.js";
 import type { WikiUpdatePlan } from "./apply.js";
 import type { AIWikiConfig, RiskLevel, WikiPage } from "./types.js";
 import { scanWikiPages } from "./wiki-store.js";
@@ -197,7 +197,7 @@ function updatePlanForCandidates(
   }
 
   return {
-    version: "0.1.0",
+    version: AIWIKI_VERSION,
     title: "Rule promotion candidates",
     entries: candidates.map((candidate) => ({
       type: "rule",

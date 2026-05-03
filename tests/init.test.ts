@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { initAIWiki } from "../src/init.js";
 import { loadAIWikiConfig } from "../src/config.js";
+import { AIWIKI_VERSION } from "../src/constants.js";
 
 async function tempProject(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "aiwiki-init-"));
@@ -36,11 +37,11 @@ describe("initAIWiki", () => {
         "utf8"
       )
     ) as { version?: string; generated_at?: string; backlinks?: Record<string, unknown> };
-    expect(graph.version).toBe("0.1.0");
+    expect(graph.version).toBe(AIWIKI_VERSION);
     expect(typeof graph.generated_at).toBe("string");
     expect(graph.nodes).toEqual([]);
     expect(graph.edges).toEqual([]);
-    expect(backlinks.version).toBe("0.1.0");
+    expect(backlinks.version).toBe(AIWIKI_VERSION);
     expect(typeof backlinks.generated_at).toBe("string");
     expect(backlinks.backlinks).toEqual({});
   });
