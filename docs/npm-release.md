@@ -80,10 +80,20 @@ npm install -g @superwoererte/aiwiki@beta
 
 ## Publish Stable
 
+For the day-to-day workflow after code changes, including how to keep
+`package.json`, `package-lock.json`, `src/constants.ts`, npm publish, and GitHub
+tags in sync, see [code-change-release-workflow.md](code-change-release-workflow.md).
+
 ```bash
 npm login --auth-type=web
-npm version patch
+npm version patch --no-git-tag-version
+# Sync src/constants.ts AIWIKI_VERSION to package.json's version.
+npm run release:check
+git add package.json package-lock.json src/constants.ts
+git commit -m "chore: release <version>"
+git tag v<version>
 npm publish --access public
+git push origin main --tags
 ```
 
 Users can install the stable release with:

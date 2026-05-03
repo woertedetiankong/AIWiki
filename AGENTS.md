@@ -16,6 +16,30 @@ Note: When reading UTF-8 files in PowerShell, use Get-Content -Encoding UTF8; th
 - Default to local-only behavior. Do not send code, diffs, notes, or wiki content to a remote provider unless the command and configuration make that explicit.
 - Keep Codex implementation plans separate from AIWiki development briefs. Briefs provide memory and constraints; they do not become step-by-step code-edit instructions.
 
+## End-User Setup Guidance
+
+To use AIWiki in another project, the user should add a short section to that
+project's root `AGENTS.md` (or the equivalent agent rules file) telling the
+coding agent when to run AIWiki. A minimal recommended section is:
+
+```markdown
+## AIWiki
+
+Use AIWiki as local project memory before and after non-trivial code changes.
+The user can describe work in natural language; the coding agent should choose
+and run the relevant AIWiki commands.
+
+- Start with `aiwiki prime`.
+- For a concrete request, run `aiwiki agent "<task>" --runbook`.
+- Before editing a source file, run `aiwiki guard <file>`.
+- After implementation, run `aiwiki reflect --from-git-diff --read-only` and `aiwiki doctor`.
+- Do not run `aiwiki apply <plan> --confirm` unless the user explicitly approves the previewed memory updates.
+```
+
+Do not require ordinary users to memorize AIWiki commands. The intended workflow
+is: user asks naturally, coding agent consults AIWiki, coding agent edits code,
+then coding agent reports changes, checks, and memory health.
+
 ## Release Facts
 
 - The public npm package is `@superwoererte/aiwiki`; the installed binary stays `aiwiki`.

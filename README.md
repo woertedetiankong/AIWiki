@@ -96,6 +96,23 @@ aiwiki agent "implement the next feature"
 aiwiki guard src/example.ts
 ```
 
+Tell your coding agent to use AIWiki by adding a short section to the project
+root `AGENTS.md` (or the equivalent rules file for your agent):
+
+```markdown
+## AIWiki
+
+Use AIWiki as local project memory before and after non-trivial code changes.
+The user can describe work in natural language; the coding agent should choose
+and run the relevant AIWiki commands.
+
+- Start with `aiwiki prime`.
+- For a concrete request, run `aiwiki agent "<task>" --runbook`.
+- Before editing a source file, run `aiwiki guard <file>`.
+- After implementation, run `aiwiki reflect --from-git-diff --read-only` and `aiwiki doctor`.
+- Do not run `aiwiki apply <plan> --confirm` unless the user explicitly approves the previewed memory updates.
+```
+
 Use `aiwiki agent "<task>" --runbook` when Codex needs a full runbook,
 `aiwiki agent "<task>" --runbook --team` when the human explicitly wants a
 multi-agent workflow, and `aiwiki brief "<task>"` when a compact development
