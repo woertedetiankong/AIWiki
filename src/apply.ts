@@ -396,6 +396,42 @@ function appendPreview(entry: WikiUpdatePlanEntry): WikiUpdateOperation["appendP
   }));
 }
 
+function stripMarkdownDecorators(value: string): string {
+  return value
+    .replace(/^#+\s*/u, "")
+    .replace(/^[-*]\s+/u, "")
+    .replace(/`([^`]+)`/gu, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/gu, "$1")
+    .trim();
+}
+
+function summaryFromMarkdownBody(body: string | undefined): string | undefined {
+  if (!body) {
+    return undefined;
+  }
+
+  const line = body
+    .split("\n")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .find((item) => !item.startsWith("#"));
+
+  if (!line) {
+    return undefined;
+  }
+
+  const summary = stripMarkdownDecorators(line);
+  if (!summary) {
+    return undefined;
+  }
+
+  return summary.length > 180 ? `${summary.slice(0, 177).trimEnd()}...` : summary;
+}
+
+function entrySummaryPreview(entry: WikiUpdatePlanEntry): string | undefined {
+  return entry.summary?.trim() || summaryFromMarkdownBody(entry.body);
+}
+
 function planFromUnknown(value: unknown): WikiUpdatePlan {
   const plan = wikiUpdatePlanSchema.parse(value);
   for (const entry of plan.entries) {
@@ -437,7 +473,7 @@ function operationForEntry(
       action: "create",
       source: entry.source,
       reason: "Target wiki page does not exist.",
-      summaryPreview: entry.summary,
+      summaryPreview: entrySummaryPreview(entry),
       frontmatterPreview: createFrontmatterPreview(entry),
       bodyPreview: previewText(templateBody(entry))
     };
@@ -452,7 +488,7 @@ function operationForEntry(
       source: entry.source,
       reason: "Target wiki page exists and explicit append sections were provided.",
       targetHash,
-      summaryPreview: entry.summary ?? entry.append.at(0)?.body,
+      summaryPreview: entry.summary ?? summaryFromMarkdownBody(entry.append.at(0)?.body),
       appendPreview: appendPreview(entry)
     };
   }
@@ -463,7 +499,7 @@ function operationForEntry(
     path: relativePath,
     action: "skip",
     source: entry.source,
-    summaryPreview: entry.summary,
+    summaryPreview: entrySummaryPreview(entry),
     targetHash,
     reason: "Target wiki page already exists and no explicit append sections were provided."
   };

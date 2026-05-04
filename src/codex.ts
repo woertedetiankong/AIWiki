@@ -163,6 +163,18 @@ async function representativeGuardTargetsFromGit(rootDir: string): Promise<strin
   return unique([...riskyTargets, ...readableCandidates]).slice(0, 5);
 }
 
+async function isGitRepository(rootDir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    });
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
 async function existingGuardTargets(
   rootDir: string,
   targets: string[]
@@ -302,6 +314,7 @@ export async function generateCodexRunbook(
     format: options.format
   });
   const initialized = await isAIWikiInitialized(rootDir);
+  const gitRepository = await isGitRepository(rootDir);
   const dirtyGuardTargets = await changedGuardTargetsFromGitStatus(rootDir);
   const representativeGuardTargets = await representativeGuardTargetsFromGit(rootDir);
   const guardTargets = (await existingGuardTargets(rootDir, [
@@ -321,16 +334,24 @@ export async function generateCodexRunbook(
   const beforeEditing = guardTargets.map((target) => `aiwiki guard ${target}`);
   const afterEditing = [
     "Run the focused project tests for changed behavior.",
-    "aiwiki reflect --from-git-diff --read-only",
+    gitRepository
+      ? "aiwiki reflect --from-git-diff --read-only"
+      : "No git repository detected; use `aiwiki reflect --notes <path> --read-only` for explicit handoff/docs, or skip git-diff reflection.",
     "aiwiki doctor",
     initialized ? "aiwiki lint" : undefined
   ].filter((item): item is string => Boolean(item));
   const memoryReview = initialized
-    ? [
+    ? gitRepository
+      ? [
         `If reflect reports useful candidate memory, run: aiwiki reflect --from-git-diff --output-plan ${planPath}`,
         `Preview it with: aiwiki apply ${planPath}`,
         "Do not run apply --confirm unless the user explicitly approves the candidate memory."
       ]
+      : [
+          `For durable memory from explicit notes, run: aiwiki reflect --notes <path> --save-raw --output-plan ${planPath}`,
+          `Preview it with: aiwiki apply ${planPath}`,
+          "Do not run apply --confirm unless the user explicitly approves the candidate memory."
+        ]
     : [
         "Reflect can summarize changed files in cold-start mode, but output plans require initialized AIWiki memory.",
         "Run `aiwiki init --project-name <name>` and `aiwiki map --write` before creating durable memory update plans.",

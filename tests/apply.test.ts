@@ -71,6 +71,75 @@ describe("applyWikiUpdatePlan", () => {
     expect(modules).toEqual([".gitkeep"]);
   });
 
+  it("uses the first useful body line as plain meaning when summary is omitted", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+
+    const result = await applyWikiUpdatePlan(rootDir, {
+      title: "Manual memory",
+      entries: [
+        {
+          type: "decision",
+          title: "Native driver path",
+          body: [
+            "# Decision: Native driver path",
+            "",
+            "Use native ESP-IDF drivers because board libraries are not compatible yet.",
+            "",
+            "## Consequences",
+            "",
+            "Firmware stays easier to debug."
+          ].join("\n")
+        }
+      ]
+    });
+
+    expect(result.preview.operations[0]?.summaryPreview).toBe(
+      "Use native ESP-IDF drivers because board libraries are not compatible yet."
+    );
+    expect(result.markdown).toContain(
+      "Plain meaning: Use native ESP-IDF drivers because board libraries are not compatible yet."
+    );
+    expect(result.markdown).not.toContain("No short explanation was provided");
+  });
+
+  it("uses append body text as plain meaning when appending without summary", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "rules", "protect-auth.md"),
+      {
+        type: "rule",
+        title: "Protect auth routes",
+        status: "active"
+      },
+      "# Rule: Protect auth routes\n\nOriginal user text.\n"
+    );
+
+    const result = await applyWikiUpdatePlan(rootDir, {
+      entries: [
+        {
+          type: "rule",
+          title: "Protect auth routes",
+          slug: "protect-auth",
+          append: [
+            {
+              heading: "Examples",
+              body: "- Check permissions before returning auth data."
+            }
+          ]
+        }
+      ]
+    });
+
+    expect(result.preview.operations[0]?.summaryPreview).toBe(
+      "Check permissions before returning auth data."
+    );
+    expect(result.markdown).toContain(
+      "Plain meaning: Check permissions before returning auth data."
+    );
+  });
+
   it("refuses confirmed applies that have not been previewed", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

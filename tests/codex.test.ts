@@ -48,6 +48,7 @@ describe("generateCodexRunbook", () => {
     await addCodexMemory(rootDir);
     await mkdir(path.join(rootDir, "src"), { recursive: true });
     await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+    await initGitProject(rootDir);
     const initialLog = await readFile(path.join(rootDir, ".aiwiki", "log.md"), "utf8");
     const initialEvals = await readFile(
       path.join(rootDir, ".aiwiki", "evals", "brief-cases.jsonl"),
@@ -73,6 +74,25 @@ describe("generateCodexRunbook", () => {
     expect(result.markdown).toContain("Report `aiwiki doctor` next actions");
     expect(await readFile(path.join(rootDir, ".aiwiki", "log.md"), "utf8")).toBe(initialLog);
     expect(await readFile(path.join(rootDir, ".aiwiki", "evals", "brief-cases.jsonl"), "utf8")).toBe(initialEvals);
+  });
+
+  it("uses notes-based reflect guidance instead of git-diff commands outside git repos", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addCodexMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+
+    const result = await generateCodexRunbook(rootDir, "import project handoff");
+    const afterEditing = result.runbook.commands.afterEditing.join("\n");
+    const memoryReview = result.runbook.commands.memoryReview.join("\n");
+
+    expect(afterEditing).not.toContain("aiwiki reflect --from-git-diff --read-only");
+    expect(afterEditing).toContain("No git repository detected");
+    expect(afterEditing).toContain("aiwiki reflect --notes <path> --read-only");
+    expect(memoryReview).not.toContain("reflect --from-git-diff --output-plan");
+    expect(memoryReview).toContain("aiwiki reflect --notes <path> --save-raw --output-plan");
+    expect(result.markdown).toContain("No git repository detected");
   });
 
   it("adds team-aware guidance without agent orchestration", async () => {
