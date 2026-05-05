@@ -15,11 +15,16 @@ import {
 } from "./constants.js";
 import { collectProjectIgnoreRules, shouldIgnorePath } from "./ignore.js";
 import type { IgnoreRule } from "./ignore.js";
+import { parseMarkdown } from "./markdown.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
 import { saveRawNote } from "./raw-notes.js";
 import { diffRiskLessonsFromChanges } from "./risk-rules.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
+import {
+  makeEmbedderFactory,
+  semanticConfigFromAIWikiConfig
+} from "./semantic-config.js";
 import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
 import type { WikiPage } from "./types.js";
 import { scanWikiPages } from "./wiki-store.js";
@@ -47,6 +52,7 @@ export interface ReflectPreview {
   fromGitDiff: boolean;
   notesPath?: string;
   rawNotePath?: string;
+  gitDiffUnavailableReason?: string;
   changedFiles: string[];
   selectedDocs: string[];
   outputPlanPath?: string;
@@ -201,7 +207,7 @@ async function isGitRepository(rootDir: string): Promise<boolean> {
 
 async function readGitStatus(rootDir: string): Promise<string> {
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--short"], {
+    const { stdout } = await execFileAsync("git", ["status", "--short", "--", "."], {
       cwd: rootDir,
       maxBuffer: 1024 * 1024
     });
@@ -271,11 +277,27 @@ async function readNotes(rootDir: string, notesPath: string | undefined): Promis
   return readFile(resolveProjectPath(rootDir, notesPath), "utf8");
 }
 
+function isLowSignalNoteSummaryLine(line: string): boolean {
+  return (
+    /^\|.*\|$/u.test(line) ||
+    /^[|:\-\s]+$/u.test(line) ||
+    /^```/u.test(line)
+  );
+}
+
+function noteContent(raw: string): string {
+  if (!raw.trim()) {
+    return "";
+  }
+
+  return parseMarkdown<Record<string, unknown>>(raw).body;
+}
+
 function firstNonEmptyLine(value: string): string | undefined {
   const line = value
     .split("\n")
     .map((line) => line.trim())
-    .find((line) => line.length > 0);
+    .find((line) => line.length > 0 && !isLowSignalNoteSummaryLine(line));
 
   return line?.replace(/^#+\s*/u, "");
 }
@@ -528,6 +550,208 @@ function lessonFrom(
   };
 }
 
+interface NoteSection {
+  title: string;
+  parentTitles: string[];
+  bodyLines: string[];
+}
+
+const NOTE_LESSON_LABELS: ReadonlyArray<{
+  type: DiffLesson["type"];
+  labels: readonly string[];
+}> = [
+  {
+    type: "pitfall",
+    labels: ["pitfall", "pitfalls", "gotcha", "gotchas", "root cause", "root causes", "踩坑", "坑", "根因", "故障"]
+  },
+  {
+    type: "decision",
+    labels: ["decision", "decisions", "adr", "adrs", "决策", "决定"]
+  },
+  {
+    type: "rule",
+    labels: ["rule", "rules", "guardrail", "guardrails", "规则", "约束"]
+  },
+  {
+    type: "pattern",
+    labels: ["pattern", "patterns", "practice", "practices", "lesson", "lessons", "模式", "实践", "经验"]
+  },
+  {
+    type: "module",
+    labels: ["module", "modules", "模块"]
+  }
+];
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function noteLessonLabelPattern(labels: readonly string[]): string {
+  return labels.map(escapeRegExp).join("|");
+}
+
+function parseNoteSections(notes: string): NoteSection[] {
+  const sections: NoteSection[] = [];
+  const headingStack: Array<{ depth: number; title: string }> = [];
+  let current: NoteSection | undefined;
+  let inFence = false;
+
+  for (const line of notes.split("\n")) {
+    const trimmed = line.trim();
+    if (/^```/u.test(trimmed)) {
+      inFence = !inFence;
+      current?.bodyLines.push(line);
+      continue;
+    }
+
+    const heading = inFence ? undefined : /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(trimmed);
+    if (heading) {
+      const depth = heading[1]!.length;
+      while (headingStack.length > 0 && headingStack.at(-1)!.depth >= depth) {
+        headingStack.pop();
+      }
+
+      current = {
+        title: heading[2]!.trim(),
+        parentTitles: headingStack.map((item) => item.title),
+        bodyLines: []
+      };
+      sections.push(current);
+      headingStack.push({ depth, title: current.title });
+      continue;
+    }
+
+    current?.bodyLines.push(line);
+  }
+
+  return sections;
+}
+
+function explicitNoteLessonType(title: string): { type: DiffLesson["type"]; title: string } | undefined {
+  for (const { type, labels } of NOTE_LESSON_LABELS) {
+    const pattern = new RegExp(`^(?:${noteLessonLabelPattern(labels)})\\s*[:：\\-]\\s*(.+)$`, "iu");
+    const match = pattern.exec(title.trim());
+    if (match?.[1]?.trim()) {
+      return { type, title: match[1].trim() };
+    }
+  }
+
+  return undefined;
+}
+
+function noteLessonTypeFromCategoryTitle(title: string): DiffLesson["type"] | undefined {
+  const normalizedTitle = title.trim().replace(/\s+encountered$/iu, "").toLocaleLowerCase();
+  for (const { type, labels } of NOTE_LESSON_LABELS) {
+    if (labels.some((label) => label.toLocaleLowerCase() === normalizedTitle)) {
+      return type;
+    }
+  }
+
+  return undefined;
+}
+
+function contextualNoteLessonType(section: NoteSection): DiffLesson["type"] | undefined {
+  for (let index = section.parentTitles.length - 1; index >= 0; index -= 1) {
+    const type = noteLessonTypeFromCategoryTitle(section.parentTitles[index]!);
+    if (type) {
+      return type;
+    }
+  }
+
+  return undefined;
+}
+
+function isNoteCategoryHeading(title: string): boolean {
+  return Boolean(noteLessonTypeFromCategoryTitle(title));
+}
+
+function firstMeaningfulBodyLine(lines: string[]): string | undefined {
+  let inFence = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (/^```/u.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence || line.length === 0 || isLowSignalNoteSummaryLine(line) || line.startsWith("#")) {
+      continue;
+    }
+
+    return line
+      .replace(/^[-*]\s+/u, "")
+      .replace(/^\d+\.\s+/u, "")
+      .trim();
+  }
+
+  return undefined;
+}
+
+function fileRefsFromNoteText(value: string): string[] {
+  const refs: string[] = [];
+  const addRef = (raw: string): void => {
+    const candidate = normalizeChangedFile(raw.trim().replace(/[),.;:]+$/u, ""));
+    if (
+      candidate.length === 0 ||
+      candidate.startsWith("http://") ||
+      candidate.startsWith("https://") ||
+      candidate.startsWith("@") ||
+      /\s/u.test(candidate) ||
+      !/[/.]/u.test(candidate) ||
+      !/\.[a-z0-9]+$/iu.test(candidate)
+    ) {
+      return;
+    }
+
+    refs.push(candidate);
+  };
+
+  for (const match of value.matchAll(/`([^`]+)`/gu)) {
+    addRef(match[1] ?? "");
+  }
+
+  for (const match of value.matchAll(/\b(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9]+\b/gu)) {
+    addRef(match[0]);
+  }
+
+  return unique(refs).sort();
+}
+
+function extractNoteLessons(notes: string): DiffLesson[] {
+  const lessons: DiffLesson[] = [];
+  const seen = new Set<string>();
+
+  for (const section of parseNoteSections(notes)) {
+    const explicit = explicitNoteLessonType(section.title);
+    const type = explicit?.type ?? contextualNoteLessonType(section);
+    const title = explicit?.title ?? section.title;
+    if (!type || isNoteCategoryHeading(title)) {
+      continue;
+    }
+
+    const summary = firstMeaningfulBodyLine(section.bodyLines) ??
+      `Review whether "${title}" should be captured as durable ${type} memory.`;
+    const files = fileRefsFromNoteText([title, ...section.bodyLines].join("\n"));
+    const key = `${type}:${title}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    lessons.push({
+      type,
+      title,
+      summary,
+      modules: pathModuleCandidates(files),
+      files,
+      status: type === "rule" ? "proposed" : undefined,
+      severity: type === "pitfall" ? "medium" : undefined,
+      tags: ["notes"]
+    });
+  }
+
+  return lessons;
+}
+
 function extractDiffLessons(diff: string, changedFiles: string[]): DiffLesson[] {
   if (!diff.trim() || changedFiles.length === 0) {
     return [];
@@ -680,37 +904,8 @@ function extractDiffLessons(diff: string, changedFiles: string[]): DiffLesson[] 
   return lessons;
 }
 
-function appendEntryForPage(
-  page: WikiPage,
-  noteSummary: string | undefined,
-  changedFiles: string[],
-  rawNotePath?: string
-): WikiUpdatePlanEntry {
-  const summary = noteSummary ?? "Reflect reviewed recent changes for this existing memory page.";
-  return {
-    type: page.frontmatter.type as WikiUpdatePlanEntry["type"],
-    title: pageTitle(page),
-    slug: pageSlug(page),
-    source: "reflect",
-    append: [
-      {
-        heading: "Recent Reflection",
-        body: [
-          summary,
-          changedFiles.length > 0
-            ? `Changed files reviewed: ${changedFiles.join(", ")}.`
-            : undefined,
-          rawNotePath ? `Source note: ${rawNotePath}.` : undefined,
-          "Review this append section before confirming the wiki update."
-        ].filter(Boolean).join("\n\n")
-      }
-    ]
-  };
-}
-
 function buildReflectUpdatePlanDraft(
   noteSummary: string | undefined,
-  notes: string,
   changedFiles: string[],
   results: SearchResult[],
   modules: string[],
@@ -731,20 +926,9 @@ function buildReflectUpdatePlanDraft(
       files: lesson.files,
       tags: lesson.tags,
       severity: lesson.severity,
+      frontmatter: rawNotePath && lesson.tags?.includes("notes") ? { source_notes: [rawNotePath] } : undefined,
       summary: lesson.summary
     });
-  }
-
-  const hasExplicitNotes = notes.trim().length > 0 || Boolean(rawNotePath);
-  const matchedPages = hasExplicitNotes
-    ? pagesOfType(results, "pitfall")
-      .concat(pagesOfType(results, "decision"))
-      .concat(pagesOfType(results, "pattern"))
-      .slice(0, 3)
-    : [];
-
-  for (const page of matchedPages) {
-    entries.push(appendEntryForPage(page, noteSummary, changedFiles, rawNotePath));
   }
 
   const existingModulePages = [
@@ -759,21 +943,15 @@ function buildReflectUpdatePlanDraft(
     ])
   );
 
-  const shouldInferNewModules =
-    Boolean(noteSummary) ||
-    diffLessons.length > 0 ||
-    riskyFiles.length > 0 ||
-    Boolean(rawNotePath);
+  const shouldInferNewModules = diffLessons.length > 0 || riskyFiles.length > 0;
   const newModuleCandidates = shouldInferNewModules
     ? modules
         .filter((moduleName) => !existingModuleNames.has(moduleName))
         .map((moduleName) => ({
           moduleName,
           files: moduleFiles(moduleName, changedFiles),
-          summary: noteSummary
-            ? `Reflection candidate from recent work: ${noteSummary}.`
-            : inferredModuleSummary(moduleName) ??
-              highRiskModuleSummary(moduleName, moduleFiles(moduleName, changedFiles), riskyFiles)
+          summary: inferredModuleSummary(moduleName) ??
+            highRiskModuleSummary(moduleName, moduleFiles(moduleName, changedFiles), riskyFiles)
         }))
         .filter((candidate) => candidate.summary)
         .sort((a, b) => {
@@ -811,47 +989,6 @@ function buildReflectUpdatePlanDraft(
       severity: "high",
       frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
       summary: "Review whether this high-risk file change introduced a reusable pitfall before confirming."
-    });
-  }
-
-  if (noteSummary && includesAny(notes, ["decision", "decided", "choose", "chose", "use ", "使用", "决定"])) {
-    entries.push({
-      type: "decision",
-      title: noteSummary,
-      slug: safeSlug(noteSummary, "decision"),
-      source: "reflect",
-      modules,
-      files: changedFiles,
-      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
-      summary: "Review whether this note records a durable product or architecture decision."
-    });
-  }
-
-  if (noteSummary && includesAny(notes, ["pattern", "reuse", "reusable", "步骤", "模式", "复用"])) {
-    entries.push({
-      type: "pattern",
-      title: noteSummary,
-      slug: safeSlug(noteSummary, "pattern"),
-      source: "reflect",
-      modules,
-      files: changedFiles,
-      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
-      summary: "Review whether this note describes a reusable implementation pattern."
-    });
-  }
-
-  if (noteSummary && includesAny(notes, ["must", "never", "always", "required", "必须", "不要", "总是"])) {
-    entries.push({
-      type: "rule",
-      title: noteSummary,
-      slug: safeSlug(noteSummary, "rule"),
-      source: "reflect",
-      status: "proposed",
-      modules,
-      files: changedFiles,
-      severity: riskyFiles.length > 0 ? "high" : "medium",
-      frontmatter: rawNotePath ? { source_notes: [rawNotePath] } : undefined,
-      summary: "Review whether this lesson is stable enough to become a proposed project rule."
     });
   }
 
@@ -1049,23 +1186,26 @@ export async function generateReflectPreview(
   if (!initialized && options.saveRaw) {
     throw new Error("Cannot use --save-raw before AIWiki is initialized. Run aiwiki init --project-name <name> first.");
   }
+  if (options.outputPlan) {
+    resolveProjectPath(rootDir, options.outputPlan);
+  }
 
   const ignoreRules = await collectProjectIgnoreRules(
     rootDir,
     LOCAL_ARTIFACT_IGNORE,
     config.ignore
   );
-  const notes = await readNotes(rootDir, options.notes);
+  const rawNotes = await readNotes(rootDir, options.notes);
+  const notes = noteContent(rawNotes);
   const savedRawNote = options.saveRaw && options.notes
-    ? await saveRawNote(rootDir, options.notes, notes, { force: options.force })
+    ? await saveRawNote(rootDir, options.notes, rawNotes, { force: options.force })
     : undefined;
-  if (options.fromGitDiff && !(await isGitRepository(rootDir))) {
-    throw new Error(
-      "reflect --from-git-diff requires a Git repository. Run git init, use --notes <path>, or skip reflect until code changes are tracked."
-    );
-  }
-  const diff = options.fromGitDiff ? await readGitDiff(rootDir) : "";
-  const status = options.fromGitDiff ? await readGitStatus(rootDir) : "";
+  const gitDiffUnavailableReason = options.fromGitDiff && !(await isGitRepository(rootDir))
+    ? "No Git repository detected; git-diff reflection skipped. Use --notes <path> for explicit handoff notes, or initialize Git if changed-file capture is required."
+    : undefined;
+  const shouldReadGitDiff = Boolean(options.fromGitDiff && !gitDiffUnavailableReason);
+  const diff = shouldReadGitDiff ? await readGitDiff(rootDir) : "";
+  const status = shouldReadGitDiff ? await readGitStatus(rootDir) : "";
   const ignoredChangedFiles = new Set(
     [
       options.outputPlan ? normalizeProjectChangedFile(rootDir, options.outputPlan) : undefined,
@@ -1078,11 +1218,16 @@ export async function generateReflectPreview(
   ])
     .filter((file) => !ignoredChangedFiles.has(file))
     .sort(), ignoreRules);
-  const diffLessons = extractDiffLessons(diff, changedFiles);
+  const diffLessons = [
+    ...extractNoteLessons(notes),
+    ...extractDiffLessons(diff, changedFiles)
+  ];
   const query = searchQuery(changedFiles, notes);
   const search = query.length > 0
     ? await searchWikiMemory(rootDir, query, {
-        limit: options.limit ?? DEFAULT_REFLECT_LIMIT
+        limit: options.limit ?? DEFAULT_REFLECT_LIMIT,
+        embedderFactory: makeEmbedderFactory(rootDir, config),
+        semantic: semanticConfigFromAIWikiConfig(config)
       })
     : { query: "", results: [] };
   const results = search.results;
@@ -1105,7 +1250,6 @@ export async function generateReflectPreview(
   const updatePlanDraft = initialized
     ? buildReflectUpdatePlanDraft(
         noteSummary,
-        notes,
         changedFiles,
         results,
         modules,
@@ -1122,6 +1266,7 @@ export async function generateReflectPreview(
     fromGitDiff: options.fromGitDiff ?? false,
     notesPath: options.notes,
     rawNotePath: savedRawNote?.rawNotePath,
+    gitDiffUnavailableReason,
     changedFiles,
     selectedDocs,
     updatePlanDraft,
@@ -1135,8 +1280,11 @@ export async function generateReflectPreview(
             initialized
               ? undefined
               : "Cold-start mode: no .aiwiki memory was loaded and no AIWiki files were written.",
+            gitDiffUnavailableReason,
             options.fromGitDiff
-              ? `Git diff changed ${changedFiles.length} file(s). Includes untracked files from git status.`
+              ? gitDiffUnavailableReason
+                ? undefined
+                : `Git diff changed ${changedFiles.length} file(s). Includes untracked files from git status.`
               : "No git diff was requested."
           ].filter((item): item is string => Boolean(item)),
           "No notes or git diff input was provided."

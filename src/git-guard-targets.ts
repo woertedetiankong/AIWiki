@@ -118,7 +118,7 @@ export async function changedGuardTargetsFromGitStatus(
 ): Promise<string[]> {
   let stdout = "";
   try {
-    ({ stdout } = await execFileAsync("git", ["status", "--short"], {
+    ({ stdout } = await execFileAsync("git", ["status", "--short", "--", "."], {
       cwd: rootDir,
       maxBuffer: 1024 * 1024
     }));

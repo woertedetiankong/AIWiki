@@ -73,6 +73,41 @@ describe("generateAgentContext", () => {
     );
   });
 
+  it("keeps runbook guard targets focused when memory pages mention broad risk files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), { recursive: true });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "voice.md"),
+      {
+        type: "module",
+        title: "Voice Typing",
+        modules: ["voice-typing"],
+        files: [
+          "main/sticks3_lcd_main.c",
+          "main/sticks3_voice_main.c",
+          "tools/voice_typing_server.py"
+        ],
+        risk: "high"
+      },
+      "# Voice Typing\n\nVoice typing cleanup and ASR live on the computer-side server.\n"
+    );
+    await mkdir(path.join(rootDir, "main"), { recursive: true });
+    await mkdir(path.join(rootDir, "tools"), { recursive: true });
+    await writeFile(path.join(rootDir, "main", "sticks3_lcd_main.c"), "void lcd(void) {}\n", "utf8");
+    await writeFile(path.join(rootDir, "main", "sticks3_voice_main.c"), "void voice(void) {}\n", "utf8");
+    await writeFile(
+      path.join(rootDir, "tools", "voice_typing_server.py"),
+      "def cleanup_voice_typing_text():\n    return 'polish asr text'\n",
+      "utf8"
+    );
+
+    const result = await generateAgentContext(rootDir, "继续优化语音转文本 demo：加 LLM 润色阶段");
+
+    expect(result.context.guardTargets[0]).toBe("tools/voice_typing_server.py");
+    expect(result.context.guardTargets).not.toContain("main/sticks3_lcd_main.c");
+  });
+
   it("exposes the agent command through the CLI", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });

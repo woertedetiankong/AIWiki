@@ -301,6 +301,25 @@ describe("AIWiki task continuity", () => {
     expect(resume.markdown).toContain("Run aiwiki guard src/task.ts before the next edit.");
   });
 
+  it("suggests Python test commands for Python-only checkpoints", async () => {
+    const rootDir = await tempProject();
+    await writeProjectFile(rootDir, "tools/voice_typing_server.py", "VALUE = 1\n");
+    await writeProjectFile(rootDir, "tools/test_voice_typing_server.py", "import unittest\n");
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await initGitProject(rootDir);
+    await startTask(rootDir, "Python checkpoint", { id: "python-checkpoint" });
+    await writeProjectFile(rootDir, "tools/voice_typing_server.py", "VALUE = 2\n");
+
+    const checkpoint = await checkpointTask(rootDir, {
+      message: "Changed Python server"
+    });
+
+    expect(checkpoint.data.tests).toContain(
+      "Suggested test command: python -m unittest discover -s tools -p test_voice_typing_server.py"
+    );
+    expect(checkpoint.data.tests?.join("\n")).not.toContain("npm run test");
+  });
+
   it("uses latest changed-file checkpoint for handoff summaries", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -362,6 +381,43 @@ describe("AIWiki task continuity", () => {
     expect(stdout).toContain("Finished summary alias");
   });
 
+  it("accepts repeated checkpoint --tests and --next options", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await startTask(rootDir, "Repeated checkpoint options", { id: "repeated-options" });
+    const cliPath = path.resolve("src", "cli.ts");
+    const tsxLoader = pathToFileURL(
+      path.resolve("node_modules", "tsx", "dist", "loader.mjs")
+    ).href;
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        "--import",
+        tsxLoader,
+        cliPath,
+        "checkpoint",
+        "--summary",
+        "Finished repeated options",
+        "--tests",
+        "npm run typecheck",
+        "--tests",
+        "npm run test",
+        "--next",
+        "Review output",
+        "--next",
+        "Close task",
+        "--no-from-git-diff"
+      ],
+      { cwd: rootDir }
+    );
+
+    expect(stdout).toContain("npm run typecheck");
+    expect(stdout).toContain("npm run test");
+    expect(stdout).toContain("Review output");
+    expect(stdout).toContain("Close task");
+  });
+
   it("lists tasks and closes the active task", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
@@ -372,7 +428,7 @@ describe("AIWiki task continuity", () => {
 
     const closed = await closeTask(rootDir, { status: "paused" });
     expect(closed.data.status).toBe("paused");
-    expect(closed.markdown).toContain("aiwiki reflect --from-git-diff");
+    expect(closed.markdown).toContain("aiwiki reflect --notes <path>");
 
     await expect(
       readFile(path.join(rootDir, ".aiwiki", "tasks", "active-task"), "utf8")

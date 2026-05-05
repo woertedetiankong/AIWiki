@@ -45,12 +45,24 @@ export interface AIWikiConfig {
     ignorePaths: string[];
     ignoreLiteralPatterns: string[];
   };
+  semantic: {
+    enabled: boolean;
+    model: string;
+    cacheDir?: string;
+    remoteHost?: string;
+    vectorWeight: number;
+    bm25Weight: number;
+    minScore: number;
+    lengthNormAnchor: number;
+    dedupThreshold: number;
+  };
 }
 
 export interface WikiPageFrontmatter {
   type: WikiPageType;
   status?: WikiPageStatus;
   title?: string;
+  summary?: string;
   modules?: string[];
   files?: string[];
   tags?: string[];

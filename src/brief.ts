@@ -8,6 +8,10 @@ import {
   INDEX_PATH
 } from "./constants.js";
 import { AIWikiNotInitializedError, createDefaultConfig, loadAIWikiConfig } from "./config.js";
+import {
+  makeEmbedderFactory,
+  semanticConfigFromAIWikiConfig
+} from "./semantic-config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
 import {
@@ -250,6 +254,15 @@ function taskDiscoveryTokens(task: string, extraLowSignalTokens: string[] = []):
   }
   if (/\b(markdown|md)\b/iu.test(task) || /马克down|文档/u.test(task)) {
     tokens.push("markdown", "doc", "docs");
+  }
+  if (/\b(voice|speech|audio|asr|transcription|dictation)\b/iu.test(task) || /语音|录音|听写|识别|转文本|输入法/u.test(task)) {
+    tokens.push("voice", "speech", "audio", "asr", "transcription", "typing");
+  }
+  if (/\b(cleanup|clean-up|polish|rewrite|formatting)\b/iu.test(task) || /润色|整理|改写|修饰/u.test(task)) {
+    tokens.push("cleanup", "clean", "polish", "rewrite", "format");
+  }
+  if (/\b(dictionary|vocabulary|glossary)\b/iu.test(task) || /词典|字典|术语/u.test(task)) {
+    tokens.push("dictionary", "vocabulary", "glossary");
   }
   if (/\b(requirement|requirements|prd|handoff|progress)\b/iu.test(task) || /需求|交接|进度|记录/u.test(task)) {
     tokens.push("requirement", "requirements", "prd", "handoff", "progress");
@@ -1043,7 +1056,9 @@ export async function generateDevelopmentBrief(
     config.ignore
   );
   const search = await searchWikiMemory(rootDir, task, {
-    limit: options.limit ?? DEFAULT_BRIEF_LIMIT
+    limit: options.limit ?? DEFAULT_BRIEF_LIMIT,
+    embedderFactory: makeEmbedderFactory(rootDir, config),
+    semantic: semanticConfigFromAIWikiConfig(config)
   });
   const results = search.results;
   const strongResults = highConfidenceResults(results);

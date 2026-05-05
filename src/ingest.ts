@@ -7,6 +7,10 @@ import { resolveProjectPath } from "./paths.js";
 import { normalizeRawNoteSourcePath, saveRawNote } from "./raw-notes.js";
 import { searchWikiMemory } from "./search.js";
 import type { SearchResult } from "./search.js";
+import {
+  makeEmbedderFactory,
+  semanticConfigFromAIWikiConfig
+} from "./semantic-config.js";
 import type { WikiUpdatePlan, WikiUpdatePlanEntry } from "./apply.js";
 import type { WikiPage } from "./types.js";
 
@@ -302,7 +306,7 @@ export async function generateIngestPreview(
   sourcePath: string,
   options: IngestOptions = {}
 ): Promise<IngestResult> {
-  await loadAIWikiConfig(rootDir);
+  const config = await loadAIWikiConfig(rootDir);
   await assertOutputPlanWritable(
     rootDir,
     options.outputPlan,
@@ -335,7 +339,9 @@ export async function generateIngestPreview(
     parsed.body.slice(0, MAX_SEARCH_TEXT).replace(/\s+/gu, " ")
   ]).join(" ");
   const search = await searchWikiMemory(rootDir, query, {
-    limit: options.limit ?? DEFAULT_INGEST_LIMIT
+    limit: options.limit ?? DEFAULT_INGEST_LIMIT,
+    embedderFactory: makeEmbedderFactory(rootDir, config),
+    semantic: semanticConfigFromAIWikiConfig(config)
   });
   const selectedDocs = search.results.map(
     (result) => `wiki/${result.page.relativePath}`

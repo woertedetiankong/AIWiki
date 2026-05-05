@@ -50,6 +50,31 @@ const architectureAuditSchema = z
     ignoreLiteralPatterns: value.ignoreLiteralPatterns ?? []
   }));
 
+const semanticConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    model: z.string().min(1).optional(),
+    cacheDir: z.string().min(1).optional(),
+    remoteHost: z.string().min(1).optional(),
+    vectorWeight: z.number().min(0).max(1).optional(),
+    bm25Weight: z.number().min(0).max(1).optional(),
+    minScore: z.number().min(0).max(1).optional(),
+    lengthNormAnchor: z.number().int().positive().optional(),
+    dedupThreshold: z.number().min(0).max(1).optional()
+  })
+  .default({})
+  .transform((value) => ({
+    enabled: value.enabled ?? true,
+    model: value.model ?? "Xenova/multilingual-e5-small",
+    cacheDir: value.cacheDir,
+    remoteHost: value.remoteHost,
+    vectorWeight: value.vectorWeight ?? 0.7,
+    bm25Weight: value.bm25Weight ?? 0.3,
+    minScore: value.minScore ?? 0.35,
+    lengthNormAnchor: value.lengthNormAnchor ?? 500,
+    dedupThreshold: value.dedupThreshold ?? 0.92
+  }));
+
 export const aiWikiConfigSchema = z
   .object({
     version: z.string().default(CONFIG_VERSION),
@@ -64,7 +89,8 @@ export const aiWikiConfigSchema = z
     ignore: z.array(z.string()).default(() => [...DEFAULT_IGNORE]),
     riskFiles: z.array(z.string()).default([]),
     highRiskModules: z.array(z.string()).default([]),
-    architectureAudit: architectureAuditSchema
+    architectureAudit: architectureAuditSchema,
+    semantic: semanticConfigSchema
   })
   .strict();
 
@@ -98,7 +124,8 @@ export function createDefaultConfig(projectName: string): AIWikiConfig {
     architectureAudit: {
       ignorePaths: [],
       ignoreLiteralPatterns: []
-    }
+    },
+    semantic: {}
   });
 }
 

@@ -21,7 +21,8 @@ describe("initAIWiki", () => {
     expect(result.created).toContain(".aiwiki/log.md");
     expect(result.created).toContain(".aiwiki/prompts/brief.md");
     expect(result.created).toContain(".aiwiki/wiki/modules/.gitkeep");
-    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings.some((warning) => warning.includes("Semantic retrieval"))).toBe(true);
 
     const config = await loadAIWikiConfig(rootDir);
     expect(config.projectName).toBe("demo");

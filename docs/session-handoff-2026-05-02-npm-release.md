@@ -4,13 +4,16 @@ Date: 2026-05-02
 
 ## Current Status
 
-AIWiki has its first public npm release:
+AIWiki's first public npm release was:
 
 - Package: `@superwoererte/aiwiki`
 - Version: `0.1.0`
 - Binary: `aiwiki`
 - License: MIT
 - Repository branch: `main`
+
+Current registry status is tracked in [npm-release.md](npm-release.md). As of
+the 2026-05-03 release, npm `latest` is `0.1.4`.
 
 The unscoped package name `aiwiki` cannot be used because npm blocks it as too
 similar to the existing `ai-wiki` package. Keep user install commands scoped,
@@ -82,4 +85,3 @@ works, and `aiwiki index build` succeeds.
   dependency failures.
 - Do not make SQLite optional unless there is a concrete user install problem
   that outweighs the current index feature value.
-

@@ -65,6 +65,10 @@ npm run release:check
 npm version patch --no-git-tag-version
 ```
 
+不要在发布前直接运行裸的 `npm version patch`。裸命令会立刻创建 release
+commit 和 tag；如果后面的检查才发现 `src/constants.ts` 没同步，就必须
+`git commit --amend` 并重新指向 tag，流程更容易乱。
+
 如果要发 minor 或 major，对应使用：
 
 ```bash
@@ -250,6 +254,15 @@ git tag -f v0.1.3
 ```
 
 如果 tag 已经推到 GitHub，不要随便 force push。优先发布下一个 patch 版本，把错误版本留作历史记录。
+
+如果 release commit 内容少了一处版本同步，但 tag 还没推送，可以先修复文件，
+再 amend release commit，并把 tag 重新指到 amend 后的提交：
+
+```bash
+git add package.json package-lock.json src/constants.ts
+git commit --amend --no-edit
+git tag -f v<version>
+```
 
 ## 最短可复制流程
 

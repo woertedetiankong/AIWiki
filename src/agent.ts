@@ -45,15 +45,69 @@ function isGuardTarget(value: string): boolean {
     !clean.startsWith("No ");
 }
 
-function guardTargetsFromBrief(brief: DevelopmentBrief): string[] {
-  const candidates = [
-    ...sectionItems(brief, "Suggested Must-Read Files"),
-    ...sectionItems(brief, "Discovered Entry Files")
-  ]
+function guardTargetTokens(task: string): string[] {
+  const tokens = task
+    .toLowerCase()
+    .split(/[^a-z0-9_./-]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+
+  if (/语音|录音|听写|识别|转文本|输入法/u.test(task)) {
+    tokens.push("voice", "speech", "audio", "asr", "transcription", "typing");
+  }
+  if (/润色|整理|改写|修饰/u.test(task)) {
+    tokens.push("cleanup", "clean", "polish", "rewrite", "format");
+  }
+  if (/词典|字典|术语/u.test(task)) {
+    tokens.push("dictionary", "vocabulary", "glossary");
+  }
+
+  return [...new Set(tokens)];
+}
+
+function guardTargetScore(target: string, tokens: string[], discovered: Set<string>): number {
+  const normalized = target.toLowerCase();
+  let score = discovered.has(target) ? 100 : 0;
+  for (const token of tokens) {
+    if (normalized.includes(token)) {
+      score += 12;
+    }
+  }
+  if (/\.(?:ts|tsx|js|jsx|mjs|cjs|py|c|h|java|rs|go|sql)$/u.test(normalized)) {
+    score += 5;
+  }
+  if (normalized.startsWith("docs/") || normalized.endsWith(".md")) {
+    score -= 20;
+  }
+
+  return score;
+}
+
+function guardTargetsFromBrief(brief: DevelopmentBrief, task: string): string[] {
+  const discoveredEntryFiles = sectionItems(brief, "Discovered Entry Files")
     .map(stripDiscoverySuffix)
     .filter(isGuardTarget);
+  const mustReadFiles = sectionItems(brief, "Suggested Must-Read Files")
+    .map(stripDiscoverySuffix)
+    .filter(isGuardTarget);
+  const discovered = new Set(discoveredEntryFiles);
+  const tokens = guardTargetTokens(task);
+  const candidates = [...discoveredEntryFiles, ...mustReadFiles];
+  const scored = candidates
+    .map((target, index) => ({
+      target,
+      index,
+      score: guardTargetScore(target, tokens, discovered)
+    }))
+    .filter((item) =>
+      discovered.size === 0 ||
+      discovered.has(item.target) ||
+      item.score > 5
+    )
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.target);
 
-  return [...new Set(candidates)].slice(0, 3);
+  return [...new Set(scored)].slice(0, 3);
 }
 
 function compactSection(items: string[], fallback: string, limit = 4): string[] {
@@ -102,7 +156,7 @@ export async function generateAgentContext(
   };
   const briefResult = await generateDevelopmentBrief(rootDir, task, briefOptions);
   const brief = briefResult.brief;
-  const guardTargets = guardTargetsFromBrief(brief);
+  const guardTargets = guardTargetsFromBrief(brief, task);
   const commands = nextCommands(task, guardTargets);
   const context: AgentContext = {
     task,

@@ -16,6 +16,7 @@ import { collectProjectIgnoreRules, shouldIgnorePath } from "./ignore.js";
 import type { IgnoreRule } from "./ignore.js";
 import { appendLogEntry } from "./log.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { suggestProjectTestCommands } from "./project-tests.js";
 import type {
   RiskLevel,
   TaskCheckpoint,
@@ -426,7 +427,7 @@ async function gitChangedFiles(rootDir: string, ignoreRules: readonly IgnoreRule
   }
 
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--short"], {
+    const { stdout } = await execFileAsync("git", ["status", "--short", "--", "."], {
       cwd: rootDir,
       maxBuffer: 1024 * 1024
     });
@@ -441,6 +442,18 @@ async function gitChangedFiles(rootDir: string, ignoreRules: readonly IgnoreRule
   }
 
   return filterIgnoredFiles([...files].sort(), ignoreRules);
+}
+
+async function isGitRepository(rootDir: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+      cwd: rootDir,
+      maxBuffer: 1024 * 1024
+    });
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
 }
 
 function statusFile(line: string): string | undefined {
@@ -458,37 +471,9 @@ function statusFile(line: string): string | undefined {
   return match?.[1] ? toPosixPath(match[1]) : undefined;
 }
 
-async function projectFileExists(rootDir: string, relativePath: string): Promise<boolean> {
-  try {
-    const fileStat = await stat(resolveProjectPath(rootDir, relativePath));
-    return fileStat.isFile();
-  } catch {
-    return false;
-  }
-}
-
-function directTestCandidate(file: string): string | undefined {
-  const parsed = path.parse(file);
-  if (!file.startsWith("src/") || !parsed.name) {
-    return undefined;
-  }
-  return `tests/${parsed.name}.test.ts`;
-}
-
 async function suggestedTests(rootDir: string, files: string[]): Promise<string[]> {
-  const commands: string[] = [];
-  for (const file of files) {
-    const candidate = directTestCandidate(file);
-    if (candidate && await projectFileExists(rootDir, candidate)) {
-      commands.push(`Suggested test command: npm run test -- ${candidate}`);
-    }
-  }
-
-  if (commands.length === 0 && await projectFileExists(rootDir, "package.json")) {
-    commands.push("Suggested test command: npm run test");
-  }
-
-  return [...new Set(commands)].slice(0, 3);
+  return (await suggestProjectTestCommands(rootDir, files))
+    .map((command) => `Suggested test command: ${command}`);
 }
 
 function inferredNextSteps(files: string[], tests: string[]): string[] {
@@ -504,6 +489,7 @@ function inferredNextSteps(files: string[], tests: string[]): string[] {
   if (tests.length > 0) {
     steps.push(`Run ${tests[0].replace(/^Suggested test command: /u, "")}.`);
   }
+  steps.push("Record a done checkpoint or close the task when the requested work is complete.");
   steps.push("Run aiwiki resume --read-only at the start of the next session.");
   return steps;
 }
@@ -865,7 +851,7 @@ function resumeMarkdown(
   const nextAction = next[0] ??
     inProgress[0] ??
     completed[0] ??
-    "Inspect the current git diff before editing.";
+    "Inspect current changed files and task notes before editing.";
 
   return `# Resume Brief for Codex
 
@@ -878,7 +864,7 @@ ${options.readOnly
 - To inspect task continuity without writes, run \`aiwiki resume --read-only\`.
 
 ## Continue From Here
-${bulletList(continueFromHere, "No next step recorded. Inspect the current git diff before editing.")}
+${bulletList(continueFromHere, "No next step recorded. Inspect current changed files and task notes before editing.")}
 
 ## Next Steps
 ${bulletList(limitItems(next, 5), "No next steps recorded.")}
@@ -905,7 +891,7 @@ ${bulletList(limitItems(blockers, 5), "None recorded.")}
 ## Codex Instructions
 - Use this resume brief as the source of truth for the current task state.
 - Do not restart from scratch.
-- First inspect the changed files and current git diff.
+- First inspect changed files; use git diff when this project is tracked by Git.
 - If this brief conflicts with the repository state, report the mismatch before editing.
 `;
 }
@@ -1502,19 +1488,22 @@ export async function closeTask(
     await rm(resolveProjectPath(rootDir, ACTIVE_TASK_PATH), { force: true });
   }
 
+  const reflectSuggestion = await isGitRepository(rootDir)
+    ? "Suggested: run `aiwiki reflect --from-git-diff` before long-term wiki updates."
+    : "Suggested: use `aiwiki reflect --notes <path>` for handoff notes before long-term wiki updates.";
   await appendLogEntry(rootDir, {
     action: "task close",
     title: metadata.title,
     bullets: [
       `Task ID: ${id}`,
       `Status: ${metadata.status}`,
-      "Suggested: run `aiwiki reflect --from-git-diff` before long-term wiki updates."
+      reflectSuggestion
     ]
   });
 
   return {
     data: metadata,
-    markdown: `# Task Closed\n\n- Task ID: ${id}\n- Status: ${metadata.status}\n- Suggested: run \`aiwiki reflect --from-git-diff\` before long-term wiki updates.\n`,
+    markdown: `# Task Closed\n\n- Task ID: ${id}\n- Status: ${metadata.status}\n- ${reflectSuggestion}\n`,
     json: toJson(metadata)
   };
 }

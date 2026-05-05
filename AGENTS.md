@@ -45,6 +45,9 @@ then coding agent reports changes, checks, and memory health.
 - The public npm package is `@superwoererte/aiwiki`; the installed binary stays `aiwiki`.
 - Do not switch docs or package metadata back to the unscoped `aiwiki` package name. npm blocks that name because it is too similar to `ai-wiki`.
 - SQLite indexing is a core feature and currently depends on `better-sqlite3`. Indexed search uses local FTS/BM25 but Markdown remains the source of truth, and stale/corrupt indexes must fall back to Markdown. A `prebuild-install` deprecation warning during install is acceptable when installation and `aiwiki index build` succeed.
+- Semantic retrieval is also a core feature starting with v0.2.0. The default embedding model is `Xenova/multilingual-e5-small` loaded through `@huggingface/transformers`; the model downloads lazily on first `aiwiki index build` and must never be downloaded during `npm install` or `aiwiki init`. Hybrid retrieval must always degrade to BM25 / Markdown when the embedder, model, or fresh embeddings are unavailable. Setting `semantic.enabled = false` in `.aiwiki/config.json` must keep AIWiki fully functional with zero network calls.
+- Version bumps must keep `package.json`, `package-lock.json`, and `src/constants.ts` `AIWIKI_VERSION` in sync; `npm run release:check` includes a CLI version-alignment test.
+- Publish to npm and verify `npm view @superwoererte/aiwiki version` before pushing release tags to GitHub, because npm OTP/browser authentication can block the final publish step.
 
 ## Architecture Rules
 
@@ -56,6 +59,7 @@ then coding agent reports changes, checks, and memory health.
 - Avoid hardcoding paths in feature modules. Use shared layout constants and path helpers.
 - Avoid hidden global state. Pass `rootDir`, config, and options explicitly so tests and future integrations can run in isolated workspaces.
 - Do not introduce heavy infrastructure for MVP features. Prefer Markdown, JSON, JSONL, and simple scans until there is a concrete scale problem.
+- Embedding model identifiers, prefixes (e.g. `query: ` / `passage: `), cache directories, and tensor handling belong in `src/embedder.ts`. Hybrid fusion weights, length normalization, min-score, and dedup logic belong in `src/semantic-search.ts`. Feature modules (search, brief, guard, reflect, ingest) must consume these via the existing helpers and must not import `@huggingface/transformers` directly.
 
 ## Hardcoding Policy
 

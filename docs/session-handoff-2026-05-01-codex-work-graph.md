@@ -4,7 +4,7 @@ Date: 2026-05-01
 
 Status update on 2026-05-02: this work was merged to `main` as part of release
 readiness, and `@superwoererte/aiwiki@0.1.0` is now published on npm. For the
-current release handoff, read `docs/session-handoff-2026-05-02-npm-release.md`.
+current registry package and release workflow, read `docs/npm-release.md`.
 
 ## Context
 

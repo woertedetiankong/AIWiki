@@ -178,6 +178,46 @@ missing, extra, or drifted pages. `aiwiki search --index` prints the same
 freshness signal and automatically falls back to Markdown search when the
 derived index is stale or corrupt.
 
+## Semantic Retrieval
+
+Starting with v0.2.0, `aiwiki index build` also produces local sentence
+embeddings so `search`, `brief`, `guard`, and `reflect` can recall memory by
+meaning, not just keywords. Embeddings stay on your machine: AIWiki bundles the
+quantized `Xenova/multilingual-e5-small` model through `@huggingface/transformers`
+and stores vectors as BLOBs alongside the FTS index in
+`.aiwiki/cache/index.sqlite`. Markdown under `.aiwiki/wiki/` remains the source
+of truth; embeddings are derived data and can be rebuilt at any time.
+
+```bash
+aiwiki index build           # downloads ~80MB on first run, then indexes locally
+aiwiki search "支付安全护栏"   # CJK + English retrieval via hybrid scoring
+aiwiki search "stripe webhook" --mode bm25     # force keyword-only search
+aiwiki search "stripe webhook" --mode hybrid   # require the semantic path
+```
+
+Hybrid retrieval fuses cosine similarity with FTS BM25 (default 0.7 / 0.3),
+applies length normalization so long pages do not dominate, drops near-duplicate
+hits, and falls back to BM25 or Markdown scanning when the embedder or model is
+unavailable. Tune the behavior via `.aiwiki/config.json`:
+
+```json
+{
+  "semantic": {
+    "enabled": true,
+    "model": "Xenova/multilingual-e5-small",
+    "vectorWeight": 0.7,
+    "bm25Weight": 0.3,
+    "minScore": 0.35,
+    "lengthNormAnchor": 500,
+    "dedupThreshold": 0.92
+  }
+}
+```
+
+Set `semantic.enabled` to `false` to skip the semantic path entirely (no model
+download, no embedding storage). `aiwiki index build --no-embeddings` builds a
+BM25-only index even when semantic is enabled in config.
+
 ## Codex Happy Path
 
 This section is for Codex and maintainers. A normal user can stay in natural

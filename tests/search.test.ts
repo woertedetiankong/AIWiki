@@ -3,9 +3,64 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildHybridIndex } from "../src/hybrid-index.js";
+import {
+  EmbedderUnavailableError,
+  type Embedder,
+  type EmbeddingTextRole
+} from "../src/embedder.js";
 import { writeMarkdownFile } from "../src/markdown.js";
 import { formatSearchResponse } from "../src/output.js";
 import { searchWikiMemory } from "../src/search.js";
+
+interface PathBiasedEmbedderOptions {
+  modelId?: string;
+  failure?: boolean;
+  /**
+   * Map from substring → axis index that should be activated for any text
+   * containing that substring. Used to make hybrid retrieval deterministic.
+   */
+  axes: Array<{ match: string; axis: number }>;
+  dimensions?: number;
+  capturedQueries?: Array<{ texts: string[]; role: EmbeddingTextRole }>;
+}
+
+function createPathBiasedEmbedder(options: PathBiasedEmbedderOptions): Embedder {
+  const dimensions = options.dimensions ?? 6;
+  const modelId = options.modelId ?? "test/path-biased";
+  return {
+    modelId,
+    dimensions,
+    async embed(texts, role) {
+      options.capturedQueries?.push({ texts: [...texts], role });
+      if (options.failure) {
+        throw new EmbedderUnavailableError("synthetic embedder failure");
+      }
+      return texts.map((text) => {
+        const data = new Float32Array(dimensions);
+        for (const axis of options.axes) {
+          if (text.toLowerCase().includes(axis.match.toLowerCase())) {
+            data[axis.axis] = 1;
+          }
+        }
+        // Normalize so cosine equals dot product.
+        let norm = 0;
+        for (let i = 0; i < dimensions; i += 1) {
+          norm += data[i] * data[i];
+        }
+        norm = Math.sqrt(norm);
+        if (norm === 0) {
+          // Provide a tiny default so the vector is non-zero but irrelevant.
+          data[dimensions - 1] = 1;
+        } else {
+          for (let i = 0; i < dimensions; i += 1) {
+            data[i] /= norm;
+          }
+        }
+        return data;
+      });
+    }
+  };
+}
 
 async function tempProject(): Promise<string> {
   return mkdtemp(path.join(os.tmpdir(), "aiwiki-search-"));
@@ -278,5 +333,244 @@ describe("searchWikiMemory", () => {
 
     expect(response.results[0]?.title).toBe("Stripe webhook raw body");
     expect(response.results[0]?.matchedFields).toContain("frontmatter");
+  });
+});
+
+describe("searchWikiMemory hybrid mode", () => {
+  it("returns hybrid results when an embedder is supplied and the index is fresh", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+
+    const embedder = createPathBiasedEmbedder({
+      axes: [
+        { match: "raw body", axis: 0 },
+        { match: "verify", axis: 0 },
+        { match: "billing", axis: 1 },
+        { match: "stripe", axis: 2 },
+        { match: "webhook", axis: 2 }
+      ]
+    });
+
+    await buildHybridIndex(rootDir, { embedder });
+
+    // Query intentionally biases toward "raw body" so the cosine path lifts
+    // the dedicated pitfall page above the broader payment module page.
+    const response = await searchWikiMemory(rootDir, "stripe raw body verification", {
+      useIndex: true,
+      embedderFactory: () => embedder
+    });
+
+    expect(response.source).toBe("hybrid");
+    expect(response.results[0]?.title).toBe("Stripe webhook raw body");
+    expect(response.results[0]?.cosine).toBeGreaterThan(0.5);
+    expect(response.indexStatus?.embeddingsFresh).toBe(true);
+  });
+
+  it("recalls memory by semantic similarity even with no keyword overlap", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, ".aiwiki", "config.json"),
+      `${JSON.stringify({ projectName: "demo" }, null, 2)}\n`,
+      "utf8"
+    );
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), {
+      recursive: true
+    });
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "auth.md"),
+      {
+        type: "module",
+        title: "Authentication",
+        summary: "Session storage and login flow.",
+        modules: ["auth"],
+        files: ["src/auth/session.ts"]
+      },
+      "# Module: Authentication\n\nSession storage and login flow live here.\n"
+    );
+    await writeMarkdownFile(
+      path.join(rootDir, ".aiwiki", "wiki", "modules", "billing.md"),
+      {
+        type: "module",
+        title: "Billing",
+        summary: "Stripe integration.",
+        modules: ["billing"],
+        files: ["src/billing/stripe.ts"]
+      },
+      "# Module: Billing\n\nStripe integration lives here.\n"
+    );
+
+    const embedder = createPathBiasedEmbedder({
+      axes: [
+        { match: "auth", axis: 0 },
+        { match: "session", axis: 0 },
+        { match: "login", axis: 0 },
+        { match: "权限", axis: 0 },
+        { match: "登录", axis: 0 },
+        { match: "billing", axis: 1 },
+        { match: "stripe", axis: 1 }
+      ]
+    });
+
+    await buildHybridIndex(rootDir, { embedder });
+
+    // Pure Chinese query that has zero lexical overlap with the wiki pages.
+    const response = await searchWikiMemory(rootDir, "用户登录与权限会话管理", {
+      useIndex: true,
+      embedderFactory: () => embedder
+    });
+
+    expect(response.source).toBe("hybrid");
+    expect(response.results[0]?.title).toBe("Authentication");
+    expect(response.results[0]?.cosine).toBeGreaterThan(0.5);
+  });
+
+  it("falls back to BM25 when the embedder fails", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+
+    const embedderForIndex = createPathBiasedEmbedder({
+      axes: [
+        { match: "stripe", axis: 0 },
+        { match: "webhook", axis: 0 }
+      ]
+    });
+    await buildHybridIndex(rootDir, { embedder: embedderForIndex });
+
+    const failingEmbedder = createPathBiasedEmbedder({
+      failure: true,
+      axes: []
+    });
+
+    const response = await searchWikiMemory(rootDir, "stripe webhook", {
+      useIndex: true,
+      embedderFactory: () => failingEmbedder
+    });
+
+    expect(response.source).toBe("sqlite");
+    expect(response.results[0]?.title).toBe("Stripe webhook raw body");
+    expect(response.semanticUnavailableReason).toBeDefined();
+  });
+
+  it("falls back to BM25 when embeddings are missing from the index", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+    // Build without an embedder → no embeddings on disk.
+    await buildHybridIndex(rootDir);
+
+    const embedder = createPathBiasedEmbedder({
+      axes: [{ match: "stripe", axis: 0 }]
+    });
+
+    const response = await searchWikiMemory(rootDir, "stripe webhook", {
+      useIndex: true,
+      embedderFactory: () => embedder
+    });
+
+    expect(response.source).toBe("sqlite");
+    expect(response.results[0]?.title).toBe("Stripe webhook raw body");
+    expect(response.semanticUnavailableReason).toContain("fresh embeddings");
+  });
+
+  it("refuses hybrid retrieval when the index uses a different model", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+
+    const oldModelEmbedder = createPathBiasedEmbedder({
+      modelId: "test/old-model",
+      axes: [{ match: "stripe", axis: 0 }]
+    });
+    await buildHybridIndex(rootDir, { embedder: oldModelEmbedder });
+
+    const newModelEmbedder = createPathBiasedEmbedder({
+      modelId: "test/new-model",
+      axes: [{ match: "stripe", axis: 0 }]
+    });
+
+    const response = await searchWikiMemory(rootDir, "stripe", {
+      useIndex: true,
+      embedderFactory: () => newModelEmbedder
+    });
+
+    expect(response.source).toBe("sqlite");
+    expect(response.semanticUnavailableReason).toBeDefined();
+  });
+
+  it("respects mode=bm25 even when an embedder is available", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+    const embedder = createPathBiasedEmbedder({
+      axes: [{ match: "stripe", axis: 0 }]
+    });
+    await buildHybridIndex(rootDir, { embedder });
+
+    const response = await searchWikiMemory(rootDir, "stripe", {
+      useIndex: true,
+      mode: "bm25",
+      embedderFactory: () => embedder
+    });
+
+    expect(response.source).toBe("sqlite");
+    expect(response.results[0]?.cosine).toBeUndefined();
+  });
+
+  it("respects mode=markdown to bypass the SQLite index entirely", async () => {
+    const rootDir = await tempProject();
+    await setupWiki(rootDir);
+    await buildHybridIndex(rootDir);
+
+    const response = await searchWikiMemory(rootDir, "stripe", {
+      mode: "markdown"
+    });
+
+    expect(response.source).toBe("markdown");
+    expect(response.indexStatus).toBeUndefined();
+  });
+
+  it("dedups near-identical pages using vector similarity", async () => {
+    const rootDir = await tempProject();
+    await mkdir(path.join(rootDir, ".aiwiki"), { recursive: true });
+    await writeFile(
+      path.join(rootDir, ".aiwiki", "config.json"),
+      `${JSON.stringify({ projectName: "demo" }, null, 2)}\n`,
+      "utf8"
+    );
+    await mkdir(path.join(rootDir, ".aiwiki", "wiki", "modules"), {
+      recursive: true
+    });
+    // Three module pages with near-identical embeddings (same axis activation),
+    // so a sane hybrid implementation should not return all three on top.
+    for (const id of ["a", "b", "c"]) {
+      await writeMarkdownFile(
+        path.join(rootDir, ".aiwiki", "wiki", "modules", `dup-${id}.md`),
+        {
+          type: "module",
+          title: `Stripe webhook handler ${id}`,
+          modules: ["payment"],
+          files: [`src/lib/stripe-${id}.ts`]
+        },
+        `# Module: Stripe webhook ${id}\n\nDuplicate stripe webhook content body.\n`
+      );
+    }
+
+    const embedder = createPathBiasedEmbedder({
+      axes: [
+        { match: "stripe", axis: 0 },
+        { match: "webhook", axis: 0 }
+      ]
+    });
+    await buildHybridIndex(rootDir, { embedder });
+
+    const response = await searchWikiMemory(rootDir, "stripe webhook", {
+      useIndex: true,
+      embedderFactory: () => embedder,
+      limit: 3
+    });
+
+    // With a 0.92 dedup threshold the three near-identical embeddings collapse
+    // to a single representative result.
+    expect(response.source).toBe("hybrid");
+    expect(response.results.length).toBeLessThan(3);
+    expect(response.results.length).toBeGreaterThanOrEqual(1);
   });
 });

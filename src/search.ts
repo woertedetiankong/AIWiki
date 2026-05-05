@@ -5,9 +5,18 @@ import {
   searchIndexedWikiPages,
   type HybridIndexStatus
 } from "./hybrid-index.js";
+import {
+  hybridSemanticSearch,
+  type SemanticSearchConfig
+} from "./semantic-search.js";
+import type { Embedder } from "./embedder.js";
 import { scanWikiPages } from "./wiki-store.js";
 
 export type SearchMatchedField = "title" | "frontmatter" | "path" | "body";
+
+export type SearchMode = "auto" | "bm25" | "hybrid" | "markdown";
+
+export type SearchSource = "markdown" | "sqlite" | "hybrid";
 
 export interface SearchResult {
   page: WikiPage;
@@ -16,19 +25,41 @@ export interface SearchResult {
   title: string;
   excerpt?: string;
   bm25?: number;
+  cosine?: number;
 }
+
+export type EmbedderFactory = () =>
+  | Promise<Embedder | undefined>
+  | Embedder
+  | undefined;
 
 export interface SearchOptions {
   type?: WikiPageType;
   limit?: number;
   useIndex?: boolean;
+  /**
+   * Default `"auto"`. Forces the retrieval path:
+   *   - `auto`     try hybrid → BM25 → markdown based on what is available
+   *   - `hybrid`   require embedder + fresh embeddings; fall back if missing
+   *   - `bm25`     skip semantic retrieval even when an embedder is available
+   *   - `markdown` skip the SQLite index and scan Markdown directly
+   */
+  mode?: SearchMode;
+  /**
+   * Optional embedder factory. When provided and the on-disk embeddings are
+   * fresh, hybrid retrieval is used. The factory may return `undefined` to
+   * indicate semantic search should be skipped (e.g. config disabled it).
+   */
+  embedderFactory?: EmbedderFactory;
+  semantic?: SemanticSearchConfig;
 }
 
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
-  source?: "markdown" | "sqlite";
+  source?: SearchSource;
   indexStatus?: HybridIndexStatus;
+  semanticUnavailableReason?: string;
 }
 
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -168,7 +199,8 @@ function addField(
 function scorePage(
   page: WikiPage,
   tokens: string[],
-  bm25?: number
+  bm25?: number,
+  cosine?: number
 ): SearchResult | undefined {
   const matchedFields = new Set<SearchMatchedField>();
   const title = extractTitle(page);
@@ -202,7 +234,8 @@ function scorePage(
     matchedFields: [...matchedFields],
     title,
     excerpt: firstMatchingExcerpt(page.body, tokens),
-    bm25
+    bm25,
+    cosine
   };
 }
 
@@ -253,6 +286,86 @@ function rankIndexedResults(results: SearchResult[], limit: number): SearchResul
     .slice(0, limit);
 }
 
+async function resolveEmbedder(
+  factory?: EmbedderFactory
+): Promise<Embedder | undefined> {
+  if (!factory) {
+    return undefined;
+  }
+  try {
+    return await Promise.resolve(factory());
+  } catch {
+    return undefined;
+  }
+}
+
+interface HybridAttemptOutcome {
+  response?: SearchResponse;
+  reason?: string;
+}
+
+async function attemptHybridSearch(
+  rootDir: string,
+  query: string,
+  tokens: string[],
+  limit: number,
+  options: SearchOptions
+): Promise<HybridAttemptOutcome> {
+  const embedder = await resolveEmbedder(options.embedderFactory);
+  if (!embedder) {
+    return { reason: "No embedder configured" };
+  }
+
+  let semanticResponse;
+  try {
+    semanticResponse = await hybridSemanticSearch(rootDir, query, {
+      type: options.type,
+      limit,
+      tokens,
+      embedder,
+      semantic: options.semantic
+    });
+  } catch (error) {
+    return {
+      reason: error instanceof Error ? error.message : String(error)
+    };
+  }
+
+  if (!semanticResponse) {
+    return { reason: "Index is missing fresh embeddings" };
+  }
+
+  const results = semanticResponse.results
+    .map((entry) => {
+      const lex = scorePage(entry.page, tokens, entry.bm25, entry.cosine);
+      if (lex) {
+        return lex;
+      }
+      // No keyword overlap, but vector said it is relevant. Surface it with a
+      // cosine-derived score so callers see a useful row instead of dropping.
+      const title = extractTitle(entry.page);
+      return {
+        page: entry.page,
+        score: Math.max(1, Math.round(entry.fusedScore * 10)),
+        matchedFields: [],
+        title,
+        excerpt: firstMatchingExcerpt(entry.page.body, tokens),
+        bm25: entry.bm25,
+        cosine: entry.cosine
+      } satisfies SearchResult;
+    })
+    .slice(0, limit);
+
+  return {
+    response: {
+      query,
+      results,
+      source: "hybrid",
+      indexStatus: semanticResponse.indexStatus
+    }
+  };
+}
+
 export async function searchWikiMemory(
   rootDir: string,
   query: string,
@@ -260,16 +373,57 @@ export async function searchWikiMemory(
 ): Promise<SearchResponse> {
   const tokens = tokenize(query);
   const limit = options.limit ?? DEFAULT_SEARCH_LIMIT;
+  const mode: SearchMode = options.mode ?? "auto";
 
   if (tokens.length === 0 || limit <= 0) {
     return { query, results: [] };
   }
 
-  let indexStatus = options.useIndex
+  if (mode === "markdown") {
+    const pages = (await scanWikiPages(rootDir)).filter((page) =>
+      options.type ? page.frontmatter.type === options.type : true
+    );
+    return {
+      query,
+      results: searchMarkdownPages(pages, tokens, limit),
+      source: "markdown"
+    };
+  }
+
+  // Backwards-compatible default: only consult the SQLite index when the
+  // caller opts in (explicit useIndex / mode / embedderFactory). Old callers
+  // without those signals get the same Markdown-scan behavior as before.
+  const wantsIndex =
+    options.useIndex === true ||
+    mode === "hybrid" ||
+    (mode === "auto" &&
+      options.useIndex !== false &&
+      options.embedderFactory !== undefined);
+
+  let indexStatus = wantsIndex
     ? await getHybridIndexStatus(rootDir)
     : undefined;
+  let semanticUnavailableReason: string | undefined;
 
-  if (options.useIndex && indexStatus?.fresh) {
+  if (
+    wantsIndex &&
+    indexStatus?.fresh &&
+    (mode === "auto" || mode === "hybrid")
+  ) {
+    const outcome = await attemptHybridSearch(
+      rootDir,
+      query,
+      tokens,
+      limit,
+      options
+    );
+    if (outcome.response) {
+      return outcome.response;
+    }
+    semanticUnavailableReason = outcome.reason;
+  }
+
+  if (wantsIndex && indexStatus?.fresh) {
     try {
       const indexedResults = await searchIndexedWikiPages(rootDir, {
         type: options.type,
@@ -294,7 +448,8 @@ export async function searchWikiMemory(
             limit
           ),
           source: "sqlite",
-          indexStatus
+          indexStatus,
+          semanticUnavailableReason
         };
       }
     } catch (error) {
@@ -312,5 +467,11 @@ export async function searchWikiMemory(
 
   const results = searchMarkdownPages(pages, tokens, limit);
 
-  return { query, results, source: "markdown", indexStatus };
+  return {
+    query,
+    results,
+    source: "markdown",
+    indexStatus,
+    semanticUnavailableReason
+  };
 }

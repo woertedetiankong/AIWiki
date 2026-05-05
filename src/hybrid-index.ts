@@ -9,6 +9,12 @@ import {
   WIKI_DIR
 } from "./constants.js";
 import { AIWikiNotInitializedError, loadAIWikiConfig } from "./config.js";
+import {
+  embeddingFromBuffer,
+  embeddingToBuffer,
+  EmbedderUnavailableError,
+  type Embedder
+} from "./embedder.js";
 import { resolveProjectPath } from "./paths.js";
 import type { OutputFormat } from "./output.js";
 import type { WikiPage, WikiPageFrontmatter, WikiPageType } from "./types.js";
@@ -16,6 +22,12 @@ import { scanWikiPages } from "./wiki-store.js";
 
 export interface HybridIndexOptions {
   exportJsonl?: boolean;
+  /**
+   * Optional embedder used to populate the wiki_page_embeddings table. When
+   * omitted (or when embedding fails), the index still builds with FTS/BM25
+   * intact and embeddings are skipped.
+   */
+  embedder?: Embedder;
 }
 
 export interface HybridIndexRecord {
@@ -24,6 +36,7 @@ export interface HybridIndexRecord {
   status: string;
   title: string;
   body: string;
+  embeddingInput: string;
   frontmatter: WikiPageFrontmatter;
   modules: string[];
   files: string[];
@@ -42,6 +55,9 @@ export interface HybridIndexBuildResult {
   indexedAt: string;
   pageCount: number;
   exportedJsonl: boolean;
+  embeddedPageCount: number;
+  embeddingModel?: string;
+  embedderError?: string;
 }
 
 export interface HybridIndexStatus {
@@ -61,7 +77,17 @@ export interface HybridIndexStatus {
   extraPages: string[];
   indexedAt?: string;
   schemaVersion?: string;
+  embeddedPageCount: number;
+  embeddingsFresh: boolean;
+  embeddingModelId?: string;
   error?: string;
+}
+
+export interface IndexedPageEmbedding {
+  relativePath: string;
+  modelId: string;
+  embedding: Float32Array;
+  sourceHash: string;
 }
 
 export interface IndexedWikiSearchOptions {
@@ -75,7 +101,13 @@ export interface IndexedWikiSearchResult {
   bm25: number;
 }
 
-const SCHEMA_VERSION = "1";
+const SCHEMA_VERSION = "2";
+
+/**
+ * Truncated text used as input to the passage embedder. The e5 family has a
+ * 512 token context and benefits from a title + summary preamble.
+ */
+const EMBEDDING_INPUT_MAX_CHARS = 2000;
 
 interface PageRow {
   relative_path: string;
@@ -147,6 +179,26 @@ function pageContentHash(page: WikiPage): string {
     .digest("hex");
 }
 
+function buildEmbeddingInput(page: WikiPage, title: string): string {
+  const summary = frontmatterValue(page.frontmatter.summary);
+  const tagList = asStringArray(page.frontmatter.tags).join(", ");
+  const moduleList = asStringArray(page.frontmatter.modules).join(", ");
+  const header = [
+    title ? `Title: ${title}` : undefined,
+    summary ? `Summary: ${summary}` : undefined,
+    moduleList ? `Modules: ${moduleList}` : undefined,
+    tagList ? `Tags: ${tagList}` : undefined
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n");
+
+  const combined = header ? `${header}\n\n${page.body}` : page.body;
+  if (combined.length <= EMBEDDING_INPUT_MAX_CHARS) {
+    return combined;
+  }
+  return combined.slice(0, EMBEDDING_INPUT_MAX_CHARS);
+}
+
 async function recordForPage(
   page: WikiPage,
   indexedAt: string
@@ -155,13 +207,15 @@ async function recordForPage(
   const modules = asStringArray(page.frontmatter.modules);
   const files = asStringArray(page.frontmatter.files);
   const tags = asStringArray(page.frontmatter.tags);
+  const title = titleForPage(page);
 
   return {
     relativePath: page.relativePath,
     type: page.frontmatter.type,
     status: page.frontmatter.status ?? "active",
-    title: titleForPage(page),
+    title,
     body: page.body,
+    embeddingInput: buildEmbeddingInput(page, title),
     frontmatter: page.frontmatter,
     modules,
     files,
@@ -285,11 +339,46 @@ function initializeSchema(db: Database.Database): void {
       body,
       frontmatter_json
     );
+
+    CREATE TABLE IF NOT EXISTS wiki_page_embeddings (
+      relative_path TEXT PRIMARY KEY,
+      model_id TEXT NOT NULL,
+      embedding BLOB NOT NULL,
+      source_hash TEXT NOT NULL,
+      embedded_at TEXT NOT NULL,
+      FOREIGN KEY (relative_path) REFERENCES wiki_pages(relative_path) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_wiki_page_embeddings_model
+      ON wiki_page_embeddings(model_id);
   `);
+}
+
+function dropAllTables(db: Database.Database): void {
+  db.exec(`
+    DROP TABLE IF EXISTS wiki_pages_fts;
+    DROP TABLE IF EXISTS wiki_page_embeddings;
+    DROP TABLE IF EXISTS wiki_page_tags;
+    DROP TABLE IF EXISTS wiki_page_files;
+    DROP TABLE IF EXISTS wiki_page_modules;
+    DROP TABLE IF EXISTS wiki_pages;
+    DROP TABLE IF EXISTS metadata;
+  `);
+}
+
+function readSchemaVersion(db: Database.Database): string | undefined {
+  try {
+    const row = db
+      .prepare("SELECT value FROM metadata WHERE key = ?")
+      .get("schema_version") as { value?: string } | undefined;
+    return row?.value;
+  } catch {
+    return undefined;
+  }
 }
 
 function resetIndexTables(db: Database.Database): void {
   db.exec(`
+    DELETE FROM wiki_page_embeddings;
     DELETE FROM wiki_pages_fts;
     DELETE FROM wiki_page_tags;
     DELETE FROM wiki_page_files;
@@ -298,7 +387,16 @@ function resetIndexTables(db: Database.Database): void {
   `);
 }
 
-function insertRecords(db: Database.Database, records: HybridIndexRecord[]): void {
+interface EmbeddingPayload {
+  modelId: string;
+  vectors: Map<string, Float32Array>;
+}
+
+function insertRecords(
+  db: Database.Database,
+  records: HybridIndexRecord[],
+  embeddings?: EmbeddingPayload
+): void {
   const insertPage = db.prepare(`
     INSERT INTO wiki_pages (
       relative_path,
@@ -347,6 +445,11 @@ function insertRecords(db: Database.Database, records: HybridIndexRecord[]): voi
   const insertTag = db.prepare(`
     INSERT INTO wiki_page_tags (relative_path, tag) VALUES (?, ?)
   `);
+  const insertEmbedding = db.prepare(`
+    INSERT INTO wiki_page_embeddings (
+      relative_path, model_id, embedding, source_hash, embedded_at
+    ) VALUES (?, ?, ?, ?, ?)
+  `);
 
   const transaction = db.transaction(() => {
     resetIndexTables(db);
@@ -372,6 +475,16 @@ function insertRecords(db: Database.Database, records: HybridIndexRecord[]): voi
       for (const tag of record.tags) {
         insertTag.run(record.relativePath, tag);
       }
+      const embedding = embeddings?.vectors.get(record.relativePath);
+      if (embeddings && embedding) {
+        insertEmbedding.run(
+          record.relativePath,
+          embeddings.modelId,
+          embeddingToBuffer(embedding),
+          record.contentHash,
+          record.indexedAt
+        );
+      }
     }
 
     db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
@@ -390,9 +503,35 @@ function insertRecords(db: Database.Database, records: HybridIndexRecord[]): voi
       "page_count",
       String(records.length)
     );
+    if (embeddings) {
+      db.prepare("INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?)").run(
+        "embedding_model_id",
+        embeddings.modelId
+      );
+    } else {
+      db.prepare("DELETE FROM metadata WHERE key = ?").run("embedding_model_id");
+    }
   });
 
   transaction();
+}
+
+async function computeEmbeddings(
+  embedder: Embedder,
+  records: HybridIndexRecord[]
+): Promise<EmbeddingPayload> {
+  const inputs = records.map((record) => record.embeddingInput);
+  const vectors = await embedder.embed(inputs, "passage");
+  if (vectors.length !== records.length) {
+    throw new EmbedderUnavailableError(
+      `Embedder returned ${vectors.length} vectors for ${records.length} pages.`
+    );
+  }
+  const map = new Map<string, Float32Array>();
+  records.forEach((record, index) => {
+    map.set(record.relativePath, vectors[index]);
+  });
+  return { modelId: embedder.modelId, vectors: map };
 }
 
 async function writeJsonlSnapshot(
@@ -418,11 +557,30 @@ export async function buildHybridIndex(
   const dbPath = indexDbPath(rootDir);
   const jsonlPath = indexJsonlPath(rootDir);
 
+  let embeddings: EmbeddingPayload | undefined;
+  let embedderError: string | undefined;
+  if (options.embedder && records.length > 0) {
+    try {
+      embeddings = await computeEmbeddings(options.embedder, records);
+    } catch (error) {
+      embedderError =
+        error instanceof Error ? error.message : String(error);
+      embeddings = undefined;
+    }
+  }
+
   await mkdir(path.dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   try {
+    // If a previous index used an older schema, drop everything and rebuild
+    // with the v2 schema. Embeddings and FTS rows are derived data, so this is
+    // safe.
+    const existingVersion = readSchemaVersion(db);
+    if (existingVersion && existingVersion !== SCHEMA_VERSION) {
+      dropAllTables(db);
+    }
     initializeSchema(db);
-    insertRecords(db, records);
+    insertRecords(db, records, embeddings);
   } finally {
     db.close();
   }
@@ -437,7 +595,10 @@ export async function buildHybridIndex(
     jsonlPath: shouldExportJsonl ? jsonlPath : undefined,
     indexedAt,
     pageCount: records.length,
-    exportedJsonl: shouldExportJsonl
+    exportedJsonl: shouldExportJsonl,
+    embeddedPageCount: embeddings ? records.length : 0,
+    embeddingModel: embeddings?.modelId,
+    embedderError
   };
 }
 
@@ -506,7 +667,9 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       extraPageCount: 0,
       stalePages: [],
       missingPages: sourceRecords.map((record) => record.relativePath),
-      extraPages: []
+      extraPages: [],
+      embeddedPageCount: 0,
+      embeddingsFresh: false
     };
   }
 
@@ -548,6 +711,36 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       .filter((record) => indexedByPath.get(record.relativePath) !== record.contentHash)
       .map((record) => record.relativePath);
     const schemaVersion = readMetadata(db, "schema_version");
+    const embeddingModelId = readMetadata(db, "embedding_model_id");
+    let embeddedPageCount = 0;
+    let embeddingMismatchCount = 0;
+    const embeddingTablePresent =
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='wiki_page_embeddings'"
+        )
+        .get() !== undefined;
+    if (embeddingTablePresent) {
+      const embedRows = db
+        .prepare(
+          "SELECT relative_path, source_hash FROM wiki_page_embeddings"
+        )
+        .all() as Array<{ relative_path: string; source_hash: string }>;
+      embeddedPageCount = embedRows.length;
+      for (const row of embedRows) {
+        // Compare against the current source on disk, not the snapshot stored
+        // in wiki_pages. Either drift makes the embedding stale.
+        const sourceHash = sourceByPath.get(row.relative_path)?.contentHash;
+        if (sourceHash === undefined || sourceHash !== row.source_hash) {
+          embeddingMismatchCount += 1;
+        }
+      }
+    }
+    const embeddingsFresh =
+      embeddingTablePresent &&
+      embeddedPageCount === sourceRecords.length &&
+      embeddingMismatchCount === 0;
+
     const fresh =
       schemaVersion === SCHEMA_VERSION &&
       missingPages.length === 0 &&
@@ -572,6 +765,9 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       extraPages,
       indexedAt: readMetadata(db, "indexed_at"),
       schemaVersion,
+      embeddedPageCount,
+      embeddingsFresh,
+      embeddingModelId,
       error: ftsFresh
         ? undefined
         : `SQLite FTS table drift: ${ftsMissingPages.length} missing/duplicate, ${ftsExtraPages.length} extra.`
@@ -592,10 +788,58 @@ export async function getHybridIndexStatus(rootDir: string): Promise<HybridIndex
       stalePages: [],
       missingPages: sourceRecords.map((record) => record.relativePath),
       extraPages: [],
+      embeddedPageCount: 0,
+      embeddingsFresh: false,
       error: error instanceof Error ? error.message : String(error)
     };
   } finally {
     db?.close();
+  }
+}
+
+/**
+ * Read all stored page embeddings. Returns `undefined` when the database does
+ * not exist or has no embeddings table; the caller should fall back to a
+ * non-semantic search path.
+ */
+export async function readAllPageEmbeddings(
+  rootDir: string
+): Promise<IndexedPageEmbedding[] | undefined> {
+  const dbPath = indexDbPath(rootDir);
+  if (!(await pathExists(dbPath))) {
+    return undefined;
+  }
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const tableRow = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='wiki_page_embeddings'"
+      )
+      .get();
+    if (!tableRow) {
+      return undefined;
+    }
+
+    const rows = db
+      .prepare(
+        "SELECT relative_path, model_id, embedding, source_hash FROM wiki_page_embeddings"
+      )
+      .all() as Array<{
+        relative_path: string;
+        model_id: string;
+        embedding: Buffer;
+        source_hash: string;
+      }>;
+
+    return rows.map((row) => ({
+      relativePath: row.relative_path,
+      modelId: row.model_id,
+      embedding: embeddingFromBuffer(row.embedding),
+      sourceHash: row.source_hash
+    }));
+  } finally {
+    db.close();
   }
 }
 
@@ -680,8 +924,13 @@ export function formatHybridIndexBuildMarkdown(
     `- SQLite: ${result.dbPath}`,
     `- Pages indexed: ${result.pageCount}`,
     `- Indexed at: ${result.indexedAt}`,
-    `- JSONL snapshot: ${result.jsonlPath ?? "skipped"}`
+    `- JSONL snapshot: ${result.jsonlPath ?? "skipped"}`,
+    `- Pages embedded: ${result.embeddedPageCount}/${result.pageCount}` +
+      (result.embeddingModel ? ` (model: ${result.embeddingModel})` : "")
   ];
+  if (result.embedderError) {
+    lines.push(`- Embedder warning: ${result.embedderError}`);
+  }
 
   return `${lines.join("\n")}\n`;
 }
@@ -700,7 +949,10 @@ export function formatHybridIndexStatusMarkdown(status: HybridIndexStatus): stri
     `- Missing pages: ${status.missingPageCount}`,
     `- Extra pages: ${status.extraPageCount}`,
     `- Indexed at: ${status.indexedAt ?? "unknown"}`,
-    `- Schema version: ${status.schemaVersion ?? "unknown"}`
+    `- Schema version: ${status.schemaVersion ?? "unknown"}`,
+    `- Embeddings fresh: ${status.embeddingsFresh ? "yes" : "no"}`,
+    `- Pages embedded: ${status.embeddedPageCount}/${status.pageCount}` +
+      (status.embeddingModelId ? ` (model: ${status.embeddingModelId})` : "")
   ];
 
   if (!status.initialized) {

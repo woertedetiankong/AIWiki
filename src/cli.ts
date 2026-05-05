@@ -19,6 +19,13 @@ import {
   getHybridIndexStatus
 } from "./hybrid-index.js";
 import { initAIWiki } from "./init.js";
+import { loadAIWikiConfig } from "./config.js";
+import {
+  makeEmbedderFactory,
+  resolveIndexEmbedder,
+  semanticConfigFromAIWikiConfig
+} from "./semantic-config.js";
+import type { SearchMode } from "./search.js";
 import {
   formatSearchResponse,
   parseOutputFormat,
@@ -72,6 +79,10 @@ import type {
 import { wikiPageTypeSchema } from "./wiki-frontmatter.js";
 
 const program = new Command();
+
+function collectRepeatedOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 function parseTaskStatus(value: string | undefined): TaskStatus | undefined {
   if (value === undefined) {
@@ -439,6 +450,23 @@ program
     console.log(`Overwritten: ${result.overwritten.length}`);
   });
 
+function parseSearchMode(value: string | undefined): SearchMode | undefined {
+  if (!value) {
+    return undefined;
+  }
+  if (
+    value === "auto" ||
+    value === "bm25" ||
+    value === "hybrid" ||
+    value === "markdown"
+  ) {
+    return value;
+  }
+  throw new Error(
+    `Unknown search mode "${value}". Expected one of: auto, bm25, hybrid, markdown.`
+  );
+}
+
 program
   .command("search")
   .description("Search AIWiki project memory.")
@@ -446,20 +474,47 @@ program
   .option("--type <type>", "Restrict results to a wiki page type")
   .option("--limit <n>", "Maximum number of results")
   .option("--index", "Search the derived SQLite index when it exists", false)
+  .option(
+    "--mode <mode>",
+    "Retrieval mode: auto (default), bm25, hybrid, or markdown",
+    "auto"
+  )
   .option("--format <format>", "Output format: markdown or json", "markdown")
   .action(
     async (
       query: string,
-      options: { type?: string; limit?: string; index?: boolean; format?: string }
+      options: {
+        type?: string;
+        limit?: string;
+        index?: boolean;
+        mode?: string;
+        format?: string;
+      }
     ) => {
       const format = parseOutputFormat(options.format);
       const parsedType = options.type
         ? wikiPageTypeSchema.parse(options.type)
         : undefined;
-      const response = await searchWikiMemory(process.cwd(), query, {
+      const mode = parseSearchMode(options.mode);
+      const rootDir = process.cwd();
+
+      let embedderFactory: ReturnType<typeof makeEmbedderFactory> | undefined;
+      let semantic: ReturnType<typeof semanticConfigFromAIWikiConfig>;
+      try {
+        const config = await loadAIWikiConfig(rootDir);
+        embedderFactory = makeEmbedderFactory(rootDir, config);
+        semantic = semanticConfigFromAIWikiConfig(config);
+      } catch {
+        // Cold-start search before init: fall through with no semantic wiring.
+      }
+
+      const response = await searchWikiMemory(rootDir, query, {
         type: parsedType as WikiPageType | undefined,
         limit: parsePositiveInteger(options.limit),
-        useIndex: options.index
+        useIndex: options.index,
+        mode,
+        embedderFactory,
+        semantic
       });
 
       process.stdout.write(formatSearchResponse(response, format));
@@ -574,14 +629,31 @@ indexCommand
   .command("build")
   .description("Rebuild the derived SQLite wiki index and JSONL snapshot.")
   .option("--no-jsonl", "Skip writing the JSONL snapshot")
+  .option(
+    "--no-embeddings",
+    "Skip semantic embeddings and build a BM25-only index"
+  )
   .option("--format <format>", "Output format: markdown or json", "markdown")
-  .action(async (options: { jsonl?: boolean; format?: string }) => {
-    const format = parseOutputFormat(options.format);
-    const result = await buildHybridIndex(process.cwd(), {
-      exportJsonl: options.jsonl
-    });
-    process.stdout.write(formatHybridIndexBuildResult(result, format));
-  });
+  .action(
+    async (options: {
+      jsonl?: boolean;
+      embeddings?: boolean;
+      format?: string;
+    }) => {
+      const format = parseOutputFormat(options.format);
+      const rootDir = process.cwd();
+      let embedder = undefined;
+      if (options.embeddings !== false) {
+        const config = await loadAIWikiConfig(rootDir);
+        embedder = await resolveIndexEmbedder(rootDir, config);
+      }
+      const result = await buildHybridIndex(rootDir, {
+        exportJsonl: options.jsonl,
+        embedder
+      });
+      process.stdout.write(formatHybridIndexBuildResult(result, format));
+    }
+  );
 
 indexCommand
   .command("status")
@@ -1267,8 +1339,8 @@ program
   .option("--summary <summary>", "Alias for --message")
   .option("--step <step>", "Step or milestone name")
   .option("--status <status>", "Step status, such as done or in_progress")
-  .option("--tests <tests>", "Test note, one per line if multiple")
-  .option("--next <next>", "Next recommended step, one per line if multiple")
+  .option("--tests <tests>", "Test note, repeatable or one per line", collectRepeatedOption, [])
+  .option("--next <next>", "Next recommended step, repeatable or one per line", collectRepeatedOption, [])
   .option("--from-git-diff", "Record changed files from git diff and status; this is now the default")
   .option("--no-from-git-diff", "Skip automatic changed-file capture")
   .option("--format <format>", "Output format: markdown or json", "markdown")
@@ -1278,8 +1350,8 @@ program
       summary?: string;
       step?: string;
       status?: string;
-      tests?: string;
-      next?: string;
+      tests?: string[];
+      next?: string[];
       fromGitDiff?: boolean;
       format?: string;
     }) => {
@@ -1288,8 +1360,8 @@ program
         message: options.message ?? options.summary,
         step: options.step,
         status: options.status,
-        tests: options.tests ? [options.tests] : undefined,
-        next: options.next ? [options.next] : undefined,
+        tests: options.tests && options.tests.length > 0 ? options.tests : undefined,
+        next: options.next && options.next.length > 0 ? options.next : undefined,
         fromGitDiff: options.fromGitDiff
       });
       process.stdout.write(format === "json" ? result.json : result.markdown);

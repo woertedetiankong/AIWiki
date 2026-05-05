@@ -130,7 +130,7 @@ The current CLI includes:
 - `schema`
 - `codex`
 - `agent`
-- `search`
+- `search` (with `--mode auto|bm25|hybrid|markdown` and offline semantic retrieval)
 - `brief`
 - `guard`
 - `map`
@@ -143,8 +143,8 @@ The current CLI includes:
 - `maintain`
 - `session scan`
 - `session reflect`
-- `index build`
-- `index status`
+- `index build` (BM25 + offline embeddings; `--no-embeddings` for BM25-only)
+- `index status` (reports BM25 freshness + embedding coverage and model id)
 - `graph build`
 - `graph import-graphify`
 - `graph relate`
@@ -210,7 +210,8 @@ Later:
 - PRD checklist support for task continuity.
 - Confirmed module import workflow after write semantics are fully specified.
 - Optional code context adapter.
-- Optional semantic memory index.
+- Cross-encoder rerank, ANN acceleration, and remote embedding providers as
+  follow-ups to the v0.2.0 hybrid retrieval baseline.
 - Optional prompt/workflow optimizer.
 - Optional deep-context / recursive investigation.
 - MCP server after the local Markdown workflow remains stable.

@@ -10,7 +10,6 @@ import {
   formatReflectPreviewMarkdown,
   generateReflectPreview
 } from "../src/reflect.js";
-import { applyWikiUpdatePlan } from "../src/apply.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -102,16 +101,18 @@ describe("generateReflectPreview", () => {
     ).rejects.toThrow("Cannot use --output-plan before AIWiki is initialized");
   });
 
-  it("rejects git reflection in non-git projects with a short recovery hint", async () => {
+  it("skips git reflection in non-git projects with a short recovery hint", async () => {
     const rootDir = await tempProject();
     await writeProjectFile(rootDir, "src/example.ts", "export const value = 1;\n");
 
-    await expect(
-      generateReflectPreview(rootDir, {
-        fromGitDiff: true,
-        readOnly: true
-      })
-    ).rejects.toThrow("reflect --from-git-diff requires a Git repository");
+    const result = await generateReflectPreview(rootDir, {
+      fromGitDiff: true,
+      readOnly: true
+    });
+
+    expect(result.preview.changedFiles).toEqual([]);
+    expect(result.preview.gitDiffUnavailableReason).toContain("No Git repository detected");
+    expect(result.markdown).toContain("git-diff reflection skipped");
   });
 
   it("generates a notes-based reflection preview without wiki writes", async () => {
@@ -138,21 +139,34 @@ describe("generateReflectPreview", () => {
     );
     expect(result.markdown).toContain("Notes summary: Auth fix");
     expect(result.markdown).toContain("Auth route permission checks");
-    expect(result.markdown).toContain("candidate wiki write");
-    expect(result.markdown).toContain("No wiki pages are written until apply --confirm.");
+    expect(result.markdown).toContain("No update plan draft was generated.");
     expect(result.preview.selectedDocs).toContain("wiki/pitfalls/auth-permissions.md");
-    expect(result.preview.updatePlanDraft?.entries[0]).toMatchObject({
-      type: "pitfall",
-      source: "reflect",
-      slug: "auth-permissions"
+    expect(result.preview.updatePlanDraft).toBeUndefined();
+  });
+
+  it("skips markdown tables when summarizing notes", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/readme.md",
+      [
+        "| Supported Targets | ESP32 | ESP32-S3 | Linux |",
+        "| ----------------- | ----- | -------- | ----- |",
+        "",
+        "# StickS3 Voice Typing MVP",
+        "",
+        "Use the computer-side proxy for text cleanup."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/readme.md"
     });
 
-    const dryRun = await applyWikiUpdatePlan(
-      rootDir,
-      result.preview.updatePlanDraft
-    );
-    expect(dryRun.preview.operations[0]?.action).toBe("append");
-    expect(dryRun.preview.operations[0]?.source).toBe("reflect");
+    expect(result.markdown).toContain("Notes summary: StickS3 Voice Typing MVP");
+    expect(result.markdown).not.toContain("Notes summary: | Supported Targets");
+    expect(result.preview.updatePlanDraft).toBeUndefined();
   });
 
   it("can preserve notes as raw source while generating a reflection preview", async () => {
@@ -172,9 +186,7 @@ describe("generateReflectPreview", () => {
 
     expect(result.preview.rawNotePath).toBe(".aiwiki/sources/raw-notes/today.md");
     expect(result.markdown).toContain("Raw note copied to .aiwiki/sources/raw-notes/today.md");
-    expect(result.preview.updatePlanDraft?.entries[0]).toMatchObject({
-      source: "reflect"
-    });
+    expect(result.preview.updatePlanDraft).toBeUndefined();
     expect(await readFile(path.join(rootDir, result.preview.rawNotePath!), "utf8")).toContain(
       "Auth route must check permissions"
     );
@@ -529,7 +541,303 @@ describe("generateReflectPreview", () => {
     expect(result.preview.updatePlanDraft).toBeUndefined();
   });
 
-  it("scopes module draft files to the inferred changed module", async () => {
+  it("ignores YAML frontmatter when summarizing notes", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "---",
+        "type: raw_note",
+        "title: Deployment notes",
+        "---",
+        "# Deployment handoff",
+        "",
+        "Keep the generated summary human-readable."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md"
+    });
+
+    expect(result.markdown).toContain("Notes summary: Deployment handoff");
+    expect(result.markdown).not.toContain("Notes summary: ---");
+    expect(result.markdown).not.toContain("Notes summary: type: raw_note");
+    expect(result.preview.updatePlanDraft).toBeUndefined();
+  });
+
+  it("extracts structured note lessons without domain-specific hardcoding", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "---",
+        "type: raw_note",
+        "title: Payment deployment notes",
+        "---",
+        "# Payment deployment notes",
+        "",
+        "## Pitfalls",
+        "",
+        "### Retry job replays duplicate charges",
+        "",
+        "`src/payments/retry.ts` retried after a timeout without checking an idempotency key.",
+        "",
+        "## Decisions",
+        "",
+        "### Payment writes require idempotency keys",
+        "",
+        "All payment write paths should persist an idempotency key before calling the provider.",
+        "",
+        "## Rules",
+        "",
+        "### Never log raw provider tokens",
+        "",
+        "Provider tokens must be masked before they reach logs."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md",
+      outputPlan: ".aiwiki/context-packs/notes-plan.json"
+    });
+
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "pitfall",
+          title: "Retry job replays duplicate charges",
+          files: ["src/payments/retry.ts"],
+          modules: ["retry"],
+          summary: "`src/payments/retry.ts` retried after a timeout without checking an idempotency key."
+        }),
+        expect.objectContaining({
+          type: "decision",
+          title: "Payment writes require idempotency keys",
+          files: [],
+          modules: [],
+          summary: "All payment write paths should persist an idempotency key before calling the provider."
+        }),
+        expect.objectContaining({
+          type: "rule",
+          title: "Never log raw provider tokens",
+          status: "proposed",
+          files: [],
+          modules: [],
+          summary: "Provider tokens must be masked before they reach logs."
+        })
+      ])
+    );
+    expect(result.markdown).toContain("pitfall: Retry job replays duplicate charges");
+    expect(result.markdown).not.toContain("decision: ---");
+  });
+
+  it("extracts localized structured note lessons", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "# 串口调试记录",
+        "",
+        "## 坑",
+        "",
+        "### 串口缓冲区复用导致乱码",
+        "",
+        "`src/serial/buffer.ts` 在异步 flush 前复用了同一块缓冲区。",
+        "",
+        "## 决策",
+        "",
+        "### 写入链路保留帧序号",
+        "",
+        "每次写入都带上递增帧序号，方便定位乱序和重试。",
+        "",
+        "## 规则",
+        "",
+        "### 不要在日志里输出原始串口帧",
+        "",
+        "日志只能记录帧长度和摘要，避免把设备数据直接写入磁盘。"
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md"
+    });
+
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "pitfall",
+          title: "串口缓冲区复用导致乱码",
+          files: ["src/serial/buffer.ts"],
+          modules: ["buffer"]
+        }),
+        expect.objectContaining({
+          type: "decision",
+          title: "写入链路保留帧序号"
+        }),
+        expect.objectContaining({
+          type: "rule",
+          title: "不要在日志里输出原始串口帧",
+          status: "proposed"
+        })
+      ])
+    );
+    expect(result.markdown).toContain("pitfall: 串口缓冲区复用导致乱码");
+  });
+
+  it("extracts explicit note lesson prefixes without parent category headings", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "# Release handoff",
+        "",
+        "## Rule: Keep generated artifacts out of commits",
+        "",
+        "Generated bundle outputs should stay ignored unless a release workflow explicitly asks for them.",
+        "",
+        "## Decision: Store raw notes before parsing",
+        "",
+        "Raw source notes should remain available for audit even when the reflection preview strips metadata."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md"
+    });
+
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "rule",
+          title: "Keep generated artifacts out of commits",
+          status: "proposed"
+        }),
+        expect.objectContaining({
+          type: "decision",
+          title: "Store raw notes before parsing"
+        })
+      ])
+    );
+    expect(result.markdown).toContain("rule: Keep generated artifacts out of commits");
+    expect(result.markdown).not.toContain("Rule: Keep generated artifacts out of commits");
+  });
+
+  it("ignores markdown headings inside fenced code blocks when extracting note lessons", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "# Parser handoff",
+        "",
+        "## Pitfalls",
+        "",
+        "```md",
+        "### Example heading that should stay inert",
+        "",
+        "This is documentation sample text, not a memory candidate.",
+        "```",
+        "",
+        "### Real parser pitfall",
+        "",
+        "`src/parser/headings.ts` must ignore markdown headings while a fenced block is open."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md"
+    });
+
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "pitfall",
+          title: "Real parser pitfall",
+          files: ["src/parser/headings.ts"]
+        })
+      ])
+    );
+    expect(result.preview.updatePlanDraft?.entries).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Example heading that should stay inert"
+        })
+      ])
+    );
+  });
+
+  it("requires parent headings to be exact note lesson categories", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "# Parser handoff",
+        "",
+        "## Moduleless notes",
+        "",
+        "### Ordinary observation",
+        "",
+        "This heading contains the word module as a substring but is not a module category."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md"
+    });
+
+    expect(result.preview.updatePlanDraft).toBeUndefined();
+    expect(result.markdown).toContain("No update plan draft was generated.");
+  });
+
+  it("preserves raw note provenance for structured note lessons", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(
+      rootDir,
+      "notes/handoff.md",
+      [
+        "# Parser handoff",
+        "",
+        "## Decisions",
+        "",
+        "### Keep raw notes before parsing",
+        "",
+        "Raw notes should remain available after metadata is stripped for preview generation."
+      ].join("\n")
+    );
+
+    const result = await generateReflectPreview(rootDir, {
+      notes: "notes/handoff.md",
+      saveRaw: true
+    });
+
+    expect(result.preview.rawNotePath).toBe(".aiwiki/sources/raw-notes/handoff.md");
+    expect(result.preview.updatePlanDraft?.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "decision",
+          title: "Keep raw notes before parsing",
+          frontmatter: {
+            source_notes: [".aiwiki/sources/raw-notes/handoff.md"]
+          }
+        })
+      ])
+    );
+  });
+
+  it("does not turn notes into generic module drafts for plain changed files", async () => {
     const rootDir = await tempProject();
     await writeProjectFile(rootDir, "README.md", "# Demo\n");
     await writeProjectFile(rootDir, "prd.md", "# PRD\n");
@@ -554,18 +862,8 @@ describe("generateReflectPreview", () => {
       notes: "notes/today.md"
     });
 
-    const entries = result.preview.updatePlanDraft?.entries ?? [];
-    const briefEntry = entries.find(
-      (entry) => entry.type === "module" && entry.modules?.includes("brief")
-    );
-    const configEntry = entries.find(
-      (entry) => entry.type === "module" && entry.modules?.includes("config")
-    );
-
-    expect(briefEntry?.files).toEqual(["src/brief.ts", "tests/brief.test.ts"]);
-    expect(briefEntry?.files).not.toContain("README.md");
-    expect(briefEntry?.files).not.toContain("src/config.ts");
-    expect(configEntry?.files).toEqual(["src/config.ts"]);
+    expect(result.markdown).toContain("Notes summary: Module lesson");
+    expect(result.preview.updatePlanDraft).toBeUndefined();
   });
 
   it("does not create generic module drafts for plain changed files", async () => {
@@ -586,17 +884,19 @@ describe("generateReflectPreview", () => {
     expect(result.markdown).not.toContain("Review module summary for words.");
   });
 
-  it("writes an output plan draft without overwriting unless force is set", async () => {
+  it("writes an output plan draft for concrete git-diff lessons without overwriting unless force is set", async () => {
     const rootDir = await tempProject();
     await initAIWiki({ rootDir, projectName: "demo" });
+    await writeProjectFile(rootDir, "src/task.ts", "export const task = 1;\n");
+    await initGitProject(rootDir);
     await writeProjectFile(
       rootDir,
-      "notes/today.md",
-      "# Auth rule\n\nAuth routes must check permissions server-side.\n"
+      "src/task.ts",
+      "export const resume = '下一步做什么 / Next Action checkpoint handoff';\n"
     );
 
     const result = await generateReflectPreview(rootDir, {
-      notes: "notes/today.md",
+      fromGitDiff: true,
       outputPlan: ".aiwiki/context-packs/reflect-plan.json"
     });
 
@@ -615,13 +915,13 @@ describe("generateReflectPreview", () => {
 
     await expect(
       generateReflectPreview(rootDir, {
-        notes: "notes/today.md",
+        fromGitDiff: true,
         outputPlan: ".aiwiki/context-packs/reflect-plan.json"
       })
     ).rejects.toThrow("Refusing to overwrite existing output plan");
 
     await generateReflectPreview(rootDir, {
-      notes: "notes/today.md",
+      fromGitDiff: true,
       outputPlan: ".aiwiki/context-packs/reflect-plan.json",
       force: true
     });
@@ -696,7 +996,7 @@ describe("generateReflectPreview", () => {
       command: "reflect",
       input: { notesPath: "notes/today.md" }
     });
-    expect(evals[0]?.updatePlanDraftEntries).toBeGreaterThanOrEqual(1);
+    expect(evals[0]?.updatePlanDraftEntries).toBe(0);
   });
 
   it("supports read-only reflection previews without appending eval data", async () => {

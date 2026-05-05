@@ -8,6 +8,7 @@ AIWiki is distributed as a Node.js CLI package. The package includes the compile
 - Public package: `@superwoererte/aiwiki`
 - Installed binary: `aiwiki`
 - First published version: `0.1.0` on 2026-05-02
+- Latest verified version: `0.1.4` on 2026-05-03
 
 The unscoped `aiwiki` package name is not used because npm blocks it as too
 similar to the existing `ai-wiki` package. Keep package installation examples
@@ -93,8 +94,13 @@ git add package.json package-lock.json src/constants.ts
 git commit -m "chore: release <version>"
 git tag v<version>
 npm publish --access public
+npm view @superwoererte/aiwiki version
 git push origin main --tags
 ```
+
+If npm requires OTP or browser authentication, finish the npm publish first and
+push GitHub tags only after `npm view @superwoererte/aiwiki version` reports the
+new version.
 
 Users can install the stable release with:
 

@@ -3,7 +3,30 @@
 This file summarizes the implementation history that used to live in root-level
 `implementation-m*.md` files. Full milestone notes are archived under `docs/archive/`.
 
+## 2026-05-04
+
+### npm 0.2.0 Release: Offline Hybrid Retrieval
+
+- Added local-first semantic retrieval that fuses dense-vector cosine similarity with FTS BM25, plus length normalization, hard min-score, and near-duplicate dedup. Markdown under `.aiwiki/wiki/` remains the source of truth and embeddings are derived data.
+- Bundled the quantized `Xenova/multilingual-e5-small` model through `@huggingface/transformers`. The model downloads lazily on first `aiwiki index build` (~80MB) into `.aiwiki/cache/models/`; `npm install` and `aiwiki init` do not require network access.
+- Bumped the SQLite index to schema v2 with a new `wiki_page_embeddings` table. Older `v1` indexes are detected and rebuilt automatically; embeddings stay derived data and are dropped/rebuilt on schema change.
+- Made `search`, `brief`, `guard`, `reflect`, and `ingest` automatically benefit from hybrid retrieval when the index is fresh and an embedder is available, with three-layer fallback (hybrid → BM25 → Markdown) when prerequisites are missing.
+- Added a `summary` field to wiki page frontmatter (≤500 chars) so semantic input includes a curated description; existing pages keep working without the field.
+- Added `aiwiki search --mode auto|bm25|hybrid|markdown` and `aiwiki index build --no-embeddings` for explicit control over the retrieval path. `aiwiki index status` now reports embedding coverage, embedding freshness, and the embedding model id.
+- Added a `semantic` config block under `.aiwiki/config.json` (`enabled`, `model`, `cacheDir`, `vectorWeight`, `bm25Weight`, `minScore`, `lengthNormAnchor`, `dedupThreshold`) so users can tune or disable the hybrid path. Defaults: `enabled=true`, weights 0.7 / 0.3, min score 0.35, length anchor 500, dedup threshold 0.92.
+- Updated `aiwiki init` to surface a one-time warning explaining that semantic retrieval is enabled by default and that `aiwiki index build` triggers the model download.
+- Documented the new contract in `README.md`, `SPEC.md` (§4 Search Layer, §6.2 search, §6.2a index, §3.3 dependencies), `SPEC-FUTURE.md` §7 (rescoped to remaining backlog), and `prd.md`.
+- Verified with `npm run release:check`, `npm run typecheck`, the full vitest suite (247 tests), and the new `tests/embedder.test.ts`, `tests/hybrid-index.test.ts`, and hybrid scenarios in `tests/search.test.ts`.
+
 ## 2026-05-03
+
+### npm 0.1.4 Release
+
+- Published `@superwoererte/aiwiki@0.1.4` to npm and pushed the matching `v0.1.4` Git tag.
+- Shipped the session-to-memory preview workflow as the current npm `latest` release.
+- Polished apply previews so plans without an explicit summary show the first useful Markdown body line as the plain-language meaning.
+- Updated Codex runbooks so projects outside Git repositories receive notes-based reflection guidance instead of unusable `--from-git-diff` commands.
+- Verified with `npm run release:check`, npm `prepublishOnly`, `npm view @superwoererte/aiwiki version`, and `node dist/cli.js --version`; all report `0.1.4`.
 
 ### Session-To-Memory Preview
 

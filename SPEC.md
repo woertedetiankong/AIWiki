@@ -105,6 +105,12 @@ Important boundary:
    - Performs local no-LLM search over title, frontmatter, relative path, and body.
    - Scores severity and encountered count.
    - Supports type filters and result limits.
+   - Supports a hybrid retrieval path that fuses dense-vector cosine similarity with FTS BM25,
+     applies length normalization and near-duplicate removal, and falls back to BM25 or Markdown
+     scanning when prerequisites are not met.
+   - Loads embeddings via a pluggable embedder. The default embedder runs the quantized
+     `Xenova/multilingual-e5-small` model fully offline through `@huggingface/transformers`. Model
+     paths and prefixes belong in the embedder module, not in feature modules.
 
 5. `Context Compiler`
    - Generates Development Briefs.
@@ -171,6 +177,9 @@ Required:
 - Local filesystem.
 - SQLite support through `better-sqlite3` for derived hybrid indexes.
 - TypeScript runtime/build toolchain for development.
+- `@huggingface/transformers` for the local embedding model used by hybrid retrieval. The model
+  is downloaded lazily on first use; an offline-only build MAY set `semantic.enabled = false` in
+  config to skip the download entirely.
 
 Optional:
 
@@ -554,8 +563,21 @@ Behavior:
   not only rows returned by the FTS query.
 - Indexed search MUST automatically fall back to Markdown scanning when the index is missing,
   stale, corrupt, or the FTS table drifts from `wiki_pages`.
-- Markdown and JSON output SHOULD expose whether results came from Markdown or SQLite and include
-  index freshness status when `--index` is requested.
+- Markdown and JSON output SHOULD expose whether results came from Markdown, SQLite (BM25), or
+  hybrid retrieval, and include index freshness status when `--index` is requested.
+- MUST support a `--mode` flag with values `auto`, `bm25`, `hybrid`, and `markdown`. Default
+  `auto` MUST prefer hybrid retrieval when the SQLite index is fresh, embeddings exist, the
+  embedding model matches the configured model, and an embedder is available; otherwise it MUST
+  fall back to BM25 over the index, then to Markdown scanning.
+- `--mode hybrid` MUST attempt the hybrid path and MUST fall back to BM25 / Markdown when the
+  prerequisites are not met, surfacing the reason in the response.
+- `--mode bm25` MUST skip the semantic path even when an embedder is available.
+- `--mode markdown` MUST bypass the SQLite index entirely.
+- Hybrid retrieval MUST fuse query/passage cosine similarity with FTS BM25 using configurable
+  weights, MUST apply length normalization so long pages do not dominate, MUST apply a hard
+  minimum fused score, and MUST drop near-duplicate hits using vector similarity.
+- Hybrid retrieval MUST refuse to mix embeddings produced by a different embedding model than the
+  one currently configured, falling back to a non-semantic path instead.
 - MUST return an empty result set for empty query tokens or no matches.
 
 ### 6.2a `aiwiki index`
@@ -563,7 +585,7 @@ Behavior:
 Usage:
 
 ```bash
-aiwiki index build [--no-jsonl] [--format markdown|json]
+aiwiki index build [--no-jsonl] [--no-embeddings] [--format markdown|json]
 aiwiki index status [--format markdown|json]
 ```
 
@@ -574,10 +596,20 @@ Behavior:
   provided.
 - MUST keep Markdown under `.aiwiki/wiki/` as the source of truth.
 - MUST populate and query a SQLite FTS table for local BM25 ranking.
+- MUST populate a per-page embedding table when semantic retrieval is enabled in config and an
+  embedder is available; embeddings MUST stay derived data and MUST be dropped or rebuilt when
+  the schema version changes.
+- MUST proceed with BM25 indexing even when the embedder fails, surfacing the failure as a
+  warning instead of crashing the build.
+- `--no-embeddings` MUST force a BM25-only build without computing or persisting embeddings.
 - `index status` MUST compare indexed page rows and FTS rows back to current Markdown pages.
 - `index status` MUST report stale, missing, extra, corrupt, or FTS-drifted index state without
   modifying wiki memory.
+- `index status` MUST report embedded page count, embedding freshness, and the embedding model id
+  alongside the BM25 freshness signal.
 - A stale or corrupt derived index MUST be rebuildable with `aiwiki index build`.
+- A schema version change between releases MUST trigger a full rebuild of derived index tables
+  (no manual migration required for users).
 
 ### 6.3 `aiwiki brief`
 

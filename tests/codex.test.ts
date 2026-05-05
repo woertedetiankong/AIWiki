@@ -220,6 +220,22 @@ describe("generateCodexRunbook", () => {
     expect(result.markdown).toContain("aiwiki guard src/new-widget.tsx");
   });
 
+  it("prioritizes task-matching guard targets over unrelated dirty files", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await addCodexMemory(rootDir);
+    await mkdir(path.join(rootDir, "src"), { recursive: true });
+    await writeFile(path.join(rootDir, "src", "search.ts"), "export const search = true;\n", "utf8");
+    await writeFile(path.join(rootDir, "src", "unrelated.ts"), "export const unrelated = true;\n", "utf8");
+    await initGitProject(rootDir);
+    await writeFile(path.join(rootDir, "src", "unrelated.ts"), "export const unrelated = false;\n", "utf8");
+
+    const result = await generateCodexRunbook(rootDir, "improve search memory");
+
+    expect(result.runbook.guardTargets[0]).toBe("src/search.ts");
+    expect(result.runbook.guardTargets).toContain("src/unrelated.ts");
+  });
+
   it("keeps cold-start team runbooks on commands that can run before init", async () => {
     const rootDir = await tempProject();
     await writeFile(path.join(rootDir, "README.md"), "# Demo\n", "utf8");

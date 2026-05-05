@@ -26,6 +26,7 @@ export const wikiPageFrontmatterSchema = z
     type: wikiPageTypeSchema,
     status: wikiPageStatusSchema.optional(),
     title: z.string().optional(),
+    summary: z.string().max(500).optional(),
     modules: z.array(z.string()).optional(),
     files: z.array(z.string()).optional(),
     tags: z.array(z.string()).optional(),

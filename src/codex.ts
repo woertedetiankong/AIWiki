@@ -111,6 +111,11 @@ function unique(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
+function taskLooksChangeReview(task: string): boolean {
+  return /\b(status|diff|changes?|dirty|worktree|review current|current changes)\b/iu.test(task) ||
+    /当前.*改动|现有.*改动|工作区|变更|差异/u.test(task);
+}
+
 async function trackedFilesFromGit(rootDir: string): Promise<string[]> {
   let stdout = "";
   try {
@@ -317,11 +322,18 @@ export async function generateCodexRunbook(
   const gitRepository = await isGitRepository(rootDir);
   const dirtyGuardTargets = await changedGuardTargetsFromGitStatus(rootDir);
   const representativeGuardTargets = await representativeGuardTargetsFromGit(rootDir);
-  const guardTargets = (await existingGuardTargets(rootDir, [
-    ...dirtyGuardTargets,
-    ...agent.context.guardTargets,
-    ...representativeGuardTargets
-  ])).slice(0, 5);
+  const guardTargetCandidates = taskLooksChangeReview(task)
+    ? [
+        ...dirtyGuardTargets,
+        ...agent.context.guardTargets,
+        ...representativeGuardTargets
+      ]
+    : [
+        ...agent.context.guardTargets,
+        ...dirtyGuardTargets,
+        ...(initialized && agent.context.guardTargets.length > 0 ? [] : representativeGuardTargets)
+      ];
+  const guardTargets = (await existingGuardTargets(rootDir, guardTargetCandidates)).slice(0, 5);
   const planPath = `.aiwiki/context-packs/${taskSlug(task)}-reflect-plan.json`;
   const agentCommand = `aiwiki agent ${shellQuote(task)}${options.readOnly ? " --read-only" : ""}`;
   const start = [
@@ -334,6 +346,9 @@ export async function generateCodexRunbook(
   const beforeEditing = guardTargets.map((target) => `aiwiki guard ${target}`);
   const afterEditing = [
     "Run the focused project tests for changed behavior.",
+    initialized
+      ? "Record a checkpoint with tests and next actions; close the active task when the requested work is complete."
+      : undefined,
     gitRepository
       ? "aiwiki reflect --from-git-diff --read-only"
       : "No git repository detected; use `aiwiki reflect --notes <path> --read-only` for explicit handoff/docs, or skip git-diff reflection.",

@@ -4,8 +4,8 @@ Date: 2026-05-01
 
 Status update on 2026-05-02: the broader release-readiness work was merged to
 `main`, `.aiwiki/` was removed from Git tracking and kept local-only, and
-`@superwoererte/aiwiki@0.1.0` was published to npm. For the current release
-handoff, read `docs/session-handoff-2026-05-02-npm-release.md`.
+`@superwoererte/aiwiki@0.1.0` was published to npm. For the current registry
+package and release workflow, read `docs/npm-release.md`.
 
 ## Why This Handoff Exists
 
@@ -174,7 +174,7 @@ runtime state and is ignored by git.
 
 The working tree already contained broader uncommitted changes before the final
 hybrid-index/usability pass. Do not assume every dirty file was changed in the
-latest mini-task.
+2026-05-01 mini-task.
 
 Earlier changes include:
 

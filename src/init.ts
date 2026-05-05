@@ -91,6 +91,10 @@ export async function initAIWiki(options: InitOptions = {}): Promise<InitResult>
     );
   }
 
+  result.warnings.push(
+    "Semantic retrieval is enabled by default. Run `aiwiki index build` to download the embedding model (~80MB) and populate the local index. Disable with `semantic.enabled = false` in .aiwiki/config.json."
+  );
+
   for (const directory of AIWIKI_DIRECTORIES) {
     await mkdir(resolveProjectPath(rootDir, directory), { recursive: true });
   }

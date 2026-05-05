@@ -7,6 +7,10 @@ import {
   RISK_FILE_KEYWORDS
 } from "./constants.js";
 import { AIWikiNotInitializedError, createDefaultConfig, loadAIWikiConfig } from "./config.js";
+import {
+  makeEmbedderFactory,
+  semanticConfigFromAIWikiConfig
+} from "./semantic-config.js";
 import { loadGraphifyContext } from "./graphify.js";
 import type { GraphifyContext } from "./graphify.js";
 import {
@@ -15,6 +19,7 @@ import {
 } from "./ignore.js";
 import type { IgnoreRule } from "./ignore.js";
 import { resolveProjectPath, toPosixPath } from "./paths.js";
+import { suggestProjectTestCommands } from "./project-tests.js";
 import { semanticChangeRiskMessages } from "./risk-rules.js";
 import { searchWikiMemory } from "./search.js";
 import {
@@ -367,8 +372,8 @@ function requiredChecks(filePath: string, pages: WikiPage[]): string[] {
   return checks;
 }
 
-function suggestedTests(filePath: string, pages: WikiPage[], detectedTests: string[]): string[] {
-  const exactTestItems = detectedTests.map((testFile) => `Run \`npm run test -- ${testFile}\`.`);
+function suggestedTests(filePath: string, pages: WikiPage[], testCommands: string[]): string[] {
+  const exactTestItems = testCommands.map((command) => `Run \`${command}\`.`);
   if (pages.length === 0) {
     return [
       ...exactTestItems,
@@ -742,7 +747,9 @@ export async function generateFileGuardrails(
   const projectFiles = await walkProjectFiles(rootDir, ignoreRules);
   const exactPages = await findWikiPages(rootDir, { file: normalizedFile });
   const search = await searchWikiMemory(rootDir, pathSearchQuery(normalizedFile), {
-    limit: options.limit ?? DEFAULT_GUARD_LIMIT
+    limit: options.limit ?? DEFAULT_GUARD_LIMIT,
+    embedderFactory: makeEmbedderFactory(rootDir, config),
+    semantic: semanticConfigFromAIWikiConfig(config)
   });
 
   const pagesByPath = new Map<string, WikiPage>();
@@ -774,7 +781,11 @@ export async function generateFileGuardrails(
     content: signals.exists ? await readOptionalFile(rootDir, normalizedFile) : "",
     files: projectFiles
   });
-  const testSuggestions = suggestedTests(normalizedFile, pages, detectedTests);
+  const testCommands = await suggestProjectTestCommands(rootDir, [
+    normalizedFile,
+    ...detectedTests
+  ]);
+  const testSuggestions = suggestedTests(normalizedFile, pages, testCommands);
   const fileNoteRecommended = shouldRecommendFileNote(normalizedFile, pages, signals);
   const graphify = options.withGraphify
     ? await loadGraphifyContext(rootDir)

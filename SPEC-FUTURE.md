@@ -1,6 +1,6 @@
 # AIWiki Future Specification
 
-Status: Draft backlog, refreshed after session-to-memory preview on 2026-05-03.
+Status: Draft backlog, refreshed after the `0.1.4` session-to-memory npm release on 2026-05-04.
 
 Purpose: Track optional and not-yet-implemented AIWiki capabilities separately from `SPEC.md`,
 which describes the current implemented CLI contract.
@@ -340,28 +340,51 @@ interface CodeContextResult {
 
 ## 7. Semantic Memory Index
 
-Semantic Memory Index is an optional acceleration layer beyond the current local
-SQLite FTS/BM25 index. The Markdown wiki MUST remain the source of truth, and
-the index MUST be rebuildable from `.aiwiki/`.
+Status: Core requirements implemented in v0.2.0. The current implementation is
+documented in `SPEC.md` (§4 Search Layer, §6.2 search, §6.2a index). This section
+now tracks remaining backlog items beyond the v0.2.0 release.
 
-Planned command shape:
+Implemented in v0.2.0 (now part of `SPEC.md`):
 
-```bash
-aiwiki memory index [--format markdown|json]
-aiwiki search "<query>" --semantic [--limit <n>] [--format markdown|json]
-aiwiki memory stats [--format markdown|json]
-aiwiki memory decay-preview [--format markdown|json]
-```
+- Local-first hybrid retrieval that fuses cosine similarity with FTS BM25 and falls back to
+  BM25 / Markdown when prerequisites are not met.
+- Per-page embeddings stored as SQLite BLOBs alongside the FTS index, with schema versioning
+  and full rebuild on schema change.
+- Lazy model download for `Xenova/multilingual-e5-small` via `@huggingface/transformers`,
+  with `semantic.enabled = false` to skip downloads entirely.
+- Configurable vector/BM25 weights, hard min score, length normalization anchor, and dedup
+  threshold under `semantic` in `.aiwiki/config.json`.
+- `aiwiki search --mode auto|bm25|hybrid|markdown` selector and BM25-only `index build
+  --no-embeddings` for offline-only environments.
 
-Requirements:
+Remaining backlog (still future):
 
-- MUST be disabled unless configured or explicitly invoked.
-- MUST store source page path, source page hash, index version, and indexed timestamp.
-- MUST NOT become the only copy of project memory.
-- MUST NOT auto-capture conversations into long-term memory without review.
+- **Cross-encoder rerank**: Run a second smaller model over the top-K hybrid candidates to
+  re-score with cross-attention. SHOULD remain optional and offline; MUST degrade to the
+  current hybrid score when the rerank model is unavailable.
+- **Approximate nearest neighbour acceleration**: Replace the brute-force cosine pass with an
+  ANN index (e.g. hnswlib) once typical projects exceed ~5,000 wiki pages or the cold cosine
+  pass exceeds 10ms.
+- **Optional remote embedding providers**: Opt-in support for hosted providers (OpenAI,
+  Jina, Voyage) for users who explicitly accept network egress; MUST default to local and
+  MUST be explicit per command.
+- **Adaptive retrieval policies**: Skip semantic retrieval for trivially short queries
+  (slash commands, greetings) and bias toward BM25 for path-style queries that already
+  have strong lexical signal.
+- **Layered chunk indexing (L0/L1/L2)**: Index titles, section anchors, and full-page
+  bodies as separate granularities for finer recall on long pages, only when there is
+  evidence whole-page indexing is insufficient for real users.
+- **Lifecycle decay and tier promotion**: Read-only access-count signals MAY surface
+  candidate "hot" pages for human-reviewed promotion. AIWiki MUST NOT auto-decay or
+  delete user-owned wiki memory.
+
+Requirements that still apply to backlog work:
+
+- MUST keep Markdown under `.aiwiki/wiki/` as the source of truth.
+- MUST remain rebuildable from local Markdown without remote calls when semantic is disabled.
 - MUST support deletion and full rebuild.
 - MUST ignore secrets and generated files.
-- SHOULD support scope, lifecycle metadata, and hybrid retrieval when available.
+- MUST NOT auto-capture conversations into long-term memory without review.
 
 ## 8. Prompt / Workflow Optimizer
 

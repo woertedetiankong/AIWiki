@@ -8,6 +8,9 @@ AIWiki now has a conservative first slice for the user's core pain point:
 capturing explicit coding-session lessons without creating another pile of
 unmaintained documents.
 
+Release follow-up: this workflow shipped in `@superwoererte/aiwiki@0.1.4` on
+2026-05-03.
+
 The workflow is:
 
 ```text
@@ -81,7 +84,7 @@ aiwiki doctor
 aiwiki lint
 ```
 
-Full test result: 33 files passed, 217 tests passed.
+Full release test result: 33 files passed, 220 tests passed.
 
 ## Next Work
 

@@ -219,6 +219,11 @@ describe("generateFileGuardrails", () => {
     );
     await writeFile(path.join(rootDir, "src", "helper.ts"), "export const helper = () => true;\n", "utf8");
     await writeFile(path.join(rootDir, "tests", "brief.test.ts"), "import '../src/brief.js';\n", "utf8");
+    await writeFile(
+      path.join(rootDir, "package.json"),
+      `${JSON.stringify({ scripts: { test: "vitest run" } }, null, 2)}\n`,
+      "utf8"
+    );
 
     const result = await generateFileGuardrails(rootDir, "src/brief.ts");
     const parsed = JSON.parse(result.json) as {
@@ -234,6 +239,24 @@ describe("generateFileGuardrails", () => {
     expect(parsed.fileSignals).toMatchObject({ exists: true, lines: 2 });
     expect(parsed.fileSignals.imports).toContain("./helper.js");
     expect(parsed.fileNoteRecommended).toBe(true);
+  });
+
+  it("suggests Python test commands without assuming npm", async () => {
+    const rootDir = await tempProject();
+    await initAIWiki({ rootDir, projectName: "demo" });
+    await mkdir(path.join(rootDir, "tools"), { recursive: true });
+    await writeFile(path.join(rootDir, "tools", "voice_typing_server.py"), "VALUE = 1\n", "utf8");
+    await writeFile(path.join(rootDir, "tools", "test_voice_typing_server.py"), "import unittest\n", "utf8");
+
+    const result = await generateFileGuardrails(rootDir, "tools/voice_typing_server.py");
+    const parsed = JSON.parse(result.json) as {
+      suggestedTests: string[];
+    };
+
+    expect(result.markdown).toContain(
+      "python -m unittest discover -s tools -p test_voice_typing_server.py"
+    );
+    expect(parsed.suggestedTests.join("\n")).not.toContain("npm run test");
   });
 
   it("surfaces semantic risks for database, hydration, and browser-only changes", async () => {

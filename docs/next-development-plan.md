@@ -2,7 +2,7 @@
 
 Status: Working plan based on local dogfood feedback.
 Date: 2026-04-29
-Last reviewed: 2026-05-03
+Last reviewed: 2026-05-04
 
 This document turns recent AI coding-agent feedback into an implementation
 roadmap. It is intentionally narrower than `SPEC-FUTURE.md`: the goal is to make
@@ -14,7 +14,8 @@ systems.
 AIWiki is published on npm as `@superwoererte/aiwiki`. The package is scoped
 because npm blocks the unscoped `aiwiki` name as too similar to `ai-wiki`; the
 installed binary remains `aiwiki`. The first published version was `0.1.0`; the
-source checkout is preparing the next hardened CLI iteration.
+latest verified npm version is `0.1.4`, published on 2026-05-03. The source
+checkout and `v0.1.4` tag match the npm release commit.
 
 The 2026-05-02 release smoke baseline passed for macOS, Windows, and Linux
 across Node.js 20, 22, and 24. Registry smoke also passed from a clean directory
